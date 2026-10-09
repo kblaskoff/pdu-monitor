@@ -16,6 +16,7 @@ var targets: [Target] = [
 // The application itself (SwiftUI, Sparkle) only exists on macOS; Linux builds and tests the core alone.
 dependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"))
 targets.append(.executableTarget(name: "PDUMonitor", dependencies: ["PDUCore", .product(name: "Sparkle", package: "Sparkle")]))
+targets.append(.testTarget(name: "PDUMonitorTests", dependencies: ["PDUMonitor", "PDUCore"]))
 #endif
 
 let package = Package(

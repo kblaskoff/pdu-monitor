@@ -40,6 +40,18 @@ jobs:
         run: |
           set -o pipefail
           swift test 2>&1 | tee test.log | grep -E 'error:|Executed [0-9]+ tests, with|Test Case .* failed|Fatal error' | tail -n 60
+      - name: Screenshots of the real window with the demo racks
+        continue-on-error: true
+        env:
+          PDUMONITOR_SNAPSHOTS: ${{ github.workspace }}/build/screenshots
+        run: swift test --filter SnapshotTests 2>&1 | tail -n 15
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: build/screenshots
+          if-no-files-found: ignore
       - name: Build the application (Apple Silicon and Intel)
         run: bash scripts/build-app.sh
       - name: Smoke test the packaged application
