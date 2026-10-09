@@ -178,6 +178,7 @@ final class AppModel: ObservableObject {
     var stashedRacks: [RackConfig]? { stash?.racks }
     var stashedDevices: [DeviceConfig]? { stash?.devices }
     func rebuildDriversAfterRestore() { rebuildDrivers() }
+    func clearStates() { states = [:] }
 
     private func rebuildDrivers() {
         if settings.demoMode { book.replace(demoDrivers); return }

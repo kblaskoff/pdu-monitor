@@ -80,7 +80,7 @@ extension AppModel {
         var newSettings = file.settings
         newSettings.demoMode = false
         settings = newSettings
-        states = [:]
+        clearStates()
         route = .overview
         rebuildDriversAfterRestore()
         save()
