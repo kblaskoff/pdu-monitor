@@ -10,6 +10,8 @@ public enum SNMPError: Error, LocalizedError, Equatable {
     case cannotResolve(String)
     case socket(String)
     case malformed(String)
+    /// SNMPv1 error-status 1: the answer would not fit in a packet the device is willing to send (or the request was too big).
+    case tooBig
     /// SNMPv1 error-status 2: one of the requested objects does not exist. `index` is 1-based.
     case noSuchName(index: Int)
     /// Any other error-status of the answer (3 badValue, 4 readOnly, 5 genErr, ...).
@@ -20,6 +22,7 @@ public enum SNMPError: Error, LocalizedError, Equatable {
         case .cannotResolve(let host): return "Cannot resolve \(host)"
         case .socket(let message): return "Network error: \(message)"
         case .malformed(let what): return "Unexpected answer (\(what))"
+        case .tooBig: return "The device cannot answer such a big request (tooBig)"
         case .noSuchName: return "The device does not have this object"
         case .agent(let status, _):
             switch status {
@@ -43,16 +46,21 @@ public protocol SNMPTransport: Sendable {
 extension SNMPTransport {
     /// GET that survives objects that do not exist: the offending OID is dropped and the rest is asked again.
     /// Returns only the OIDs the device has. Requests are split into groups so that one UDP packet stays small.
-    public func getAvailable(_ oids: [OID], chunk: Int = 16) async throws -> [OID: SNMPValue] {
+    public func getAvailable(_ oids: [OID], chunk: Int = 8) async throws -> [OID: SNMPValue] {
         var result: [OID: SNMPValue] = [:]
-        var index = 0
-        while index < oids.count {
-            var pending = Array(oids[index..<min(index + chunk, oids.count)])
-            index += chunk
+        var queue: [[OID]] = stride(from: 0, to: oids.count, by: max(1, chunk)).map { Array(oids[$0..<min($0 + max(1, chunk), oids.count)]) }
+        queue.reverse()
+        while var pending = queue.popLast() {
             while !pending.isEmpty {
                 do {
                     for bind in try await get(pending) where !bind.value.isMissing { result[bind.oid] = bind.value }
                     pending = []
+                } catch SNMPError.tooBig {
+                    // Many PDUs only answer small packets: the same objects are asked again in two halves, down to one by one.
+                    guard pending.count > 1 else { throw SNMPError.tooBig }
+                    let half = pending.count / 2
+                    queue.append(Array(pending[half...]))
+                    pending = Array(pending[..<half])
                 } catch SNMPError.noSuchName(let position) {
                     // Some agents leave the index at 0: then every object is asked alone.
                     if position >= 1 && position <= pending.count {
@@ -69,6 +77,11 @@ extension SNMPTransport {
         }
         return result
     }
+}
+
+/// Where the debug log goes (set by the application). Every request and answer is written as one line.
+public enum SNMPDebug {
+    public nonisolated(unsafe) static var log: (@Sendable (String) -> Void)?
 }
 
 private final class RequestCounter: @unchecked Sendable {
@@ -134,13 +147,16 @@ public struct UDPSNMPClient: SNMPTransport {
                     if remaining <= 0 { throw SNMPError.timeout }
                     guard let data = try receive(on: fd, timeoutMs: Int32(remaining * 1000) + 1) else { throw SNMPError.timeout }
                     guard let answer = try? SNMPMessage.decode(data), answer.kind == .response, answer.requestID == message.requestID else { continue }
+                    SNMPDebug.log?("\(host):\(port) \(message.kind) \(message.varbinds.count) object(s) -> status \(answer.errorStatus) index \(answer.errorIndex), \(answer.varbinds.count) answer(s)")
                     switch answer.errorStatus {
                     case 0: return answer.varbinds
+                    case 1: throw SNMPError.tooBig
                     case 2: throw SNMPError.noSuchName(index: answer.errorIndex)
                     default: throw SNMPError.agent(status: answer.errorStatus, index: answer.errorIndex)
                     }
                 }
             } catch SNMPError.timeout {
+                SNMPDebug.log?("\(host):\(port) \(message.kind) \(message.varbinds.count) object(s) -> no answer within \(timeout) s")
                 lastError = SNMPError.timeout
             }
         }

@@ -56,6 +56,7 @@ final class AppModel: ObservableObject {
     private let history: HistoryStore = NullHistoryStore()
 
     init() {
+        DebugLog.start()
         var file = ConfigStore.load()
         for i in file.devices.indices { Secrets.load(into: &file.devices[i]) }
         racks = file.racks; devices = file.devices; labels = file.labels
@@ -225,6 +226,7 @@ final class AppModel: ObservableObject {
             case .failure(let error):
                 // The last good reading is kept (greyed out on the screens) so that one lost packet does not blank the window.
                 state.error = error.localizedDescription
+                DebugLog.write("read of \(config.name) (\(config.vendor.displayName) \(config.host):\(config.port)) failed: \(error.localizedDescription) [\(error)]")
             }
             states[id] = state
         }
@@ -303,8 +305,12 @@ final class AppModel: ObservableObject {
     func test(_ device: DeviceConfig) async -> Result<PDUSnapshot, Error> {
         let client = UDPSNMPClient(host: device.host, port: UInt16(clamping: device.port), readCommunity: device.readCommunity,
                                    writeCommunity: nil, timeout: 2, retries: 1)
+        DebugLog.write("test of \(device.name) (\(device.vendor.displayName) \(device.host):\(device.port))")
         do { return .success(try await PDUDriverFactory.make(vendor: device.vendor, transport: client).poll()) }
-        catch { return .failure(error) }
+        catch {
+            DebugLog.write("test of \(device.name) failed: \(error.localizedDescription) [\(error)]")
+            return .failure(error)
+        }
     }
 }
 

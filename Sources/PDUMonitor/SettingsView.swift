@@ -211,6 +211,13 @@ struct GeneralSettings: View {
             Section("Updates") {
                 UpdatesRow()
             }
+            Section("Problems") {
+                HStack {
+                    Text("Every network request and every error is written to a log file.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Show debug log") { DebugLog.reveal() }
+                }
+            }
             Section("Demo") {
                 Toggle("Demo mode (sample racks, nothing is sent to real PDUs)", isOn: $model.settings.demoMode)
             }

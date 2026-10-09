@@ -17,6 +17,8 @@ final class FakeAgent: @unchecked Sendable {
     /// Called after a SET so that the test agent can mirror the change into a status object.
     var onSet: (@Sendable (OID, SNMPValue, FakeAgent) -> Void)?
     private(set) var requests: [SNMPMessage] = []
+    /// A request with more objects than this is answered with error-status 1 (tooBig), like PDUs with a small packet limit do.
+    var maxVarbinds = Int.max
 
     init(read: String = "public", write: String = "private") throws {
         readCommunity = read; writeCommunity = write
@@ -75,6 +77,7 @@ final class FakeAgent: @unchecked Sendable {
         let expected = request.kind == .set ? writeCommunity : readCommunity
         guard request.community == expected || (request.kind == .get && request.community == writeCommunity) else { return nil }   // silently dropped, like a real agent
         var answer = SNMPMessage(community: request.community, kind: .response, requestID: request.requestID, varbinds: request.varbinds)
+        if request.varbinds.count > maxVarbinds { answer.errorStatus = 1; answer.errorIndex = 0; return answer }
         switch request.kind {
         case .get:
             for (i, bind) in request.varbinds.enumerated() {

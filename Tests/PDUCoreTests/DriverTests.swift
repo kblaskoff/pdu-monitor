@@ -196,4 +196,27 @@ final class DriverTests: XCTestCase {
         XCTAssertEqual(got.count, 2)
         XCTAssertEqual(got[OID("1.3.6.1.2.1.1.3.0")!], .integer(3))
     }
+
+    func testDeviceWithASmallPacketLimitStillWorks() async throws {
+        // error-status 1 (tooBig) was what a real PDU answered to a request with 16 objects
+        let agent = try makeCyberPower(); defer { agent.stop() }
+        agent.maxVarbinds = 3
+        let snapshot = try await CyberPowerDriver(transport: agent.transport).poll()
+        XCTAssertEqual(snapshot.outlets.count, 16)
+        XCTAssertEqual(snapshot.outlets[2].watts, 360)
+        XCTAssertEqual(snapshot.totalWatts, 2150)
+        let apc = try makeAPC2(); defer { apc.stop() }
+        apc.maxVarbinds = 1
+        let apcSnapshot = try await APCDriver(transport: apc.transport).poll()
+        XCTAssertEqual(apcSnapshot.outlets.count, 24)
+        XCTAssertEqual(apcSnapshot.banks.map(\.amps), [5.5, 7.3])
+    }
+
+    func testTooBigEvenForOneObjectIsReported() async throws {
+        let agent = try FakeAgent(); defer { agent.stop() }
+        agent["1.3.6.1.2.1.1.1.0"] = .integer(1)
+        agent.maxVarbinds = 0
+        do { _ = try await agent.transport.getAvailable([OID("1.3.6.1.2.1.1.1.0")!]); XCTFail() }
+        catch { XCTAssertEqual(error as? SNMPError, .tooBig) }
+    }
 }
