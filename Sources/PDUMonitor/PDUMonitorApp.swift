@@ -8,6 +8,8 @@ struct PDUMonitorApp: App {
         WindowGroup("PDU Monitor") {
             ContentView().environmentObject(model)
         }
+        .defaultSize(width: 1180, height: 760)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { model.updater.checkNow() }

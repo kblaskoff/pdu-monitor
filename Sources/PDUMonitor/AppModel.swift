@@ -175,6 +175,10 @@ final class AppModel: ObservableObject {
 
     // MARK: polling
 
+    var stashedRacks: [RackConfig]? { stash?.racks }
+    var stashedDevices: [DeviceConfig]? { stash?.devices }
+    func rebuildDriversAfterRestore() { rebuildDrivers() }
+
     private func rebuildDrivers() {
         if settings.demoMode { book.replace(demoDrivers); return }
         var made: [UUID: PDUDriver] = [:]

@@ -21,6 +21,7 @@ struct RackView: View {
                 footer(summary)
             }
             .padding(20)
+            .frame(maxHeight: .infinity, alignment: .top)
             .navigationTitle("Rack \(rack.name)")
             .sheet(item: $renaming) { server in
                 RenameServerSheet(server: server, rackID: rackID)
@@ -52,7 +53,7 @@ struct RackView: View {
 
     /// The PDUs of the rack with their own load against their own limit.
     private var pduStrip: some View {
-        HStack(spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 250, maximum: 460), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
             ForEach(model.pduStates(in: rackID)) { pdu in
                 let status = pdu.status(warnFraction: model.settings.warnFraction)
                 Button { model.route = .pdu(pdu.id) } label: {
@@ -70,13 +71,12 @@ struct RackView: View {
                         LimitBar(fraction: pdu.amps.map { $0 / max(pdu.config.maxAmps, 0.1) }, status: status, height: 6)
                     }
                     .padding(10)
-                    .frame(minWidth: 220)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(status == .over ? Color.red : Color.secondary.opacity(0.25), lineWidth: status == .over ? 2 : 1))
                 }
                 .buttonStyle(.plain)
             }
-            Spacer()
         }
     }
 
@@ -95,7 +95,7 @@ struct RackView: View {
             }.width(min: 70, ideal: 70, max: 70)
             TableColumn("Ports") { server in
                 Text(server.ports.map { "\($0.pduName) #\($0.target.outlet)" }.joined(separator: " · ")).foregroundStyle(.secondary)
-            }.width(min: 110, ideal: 150, max: 210)
+            }.width(min: 150, ideal: 200, max: 340)
             TableColumn("State") { server in
                 HStack(spacing: 5) {
                     PowerDot(isOn: server.power.dotValue)
@@ -106,6 +106,7 @@ struct RackView: View {
             TableColumn("Current (A)") { server in Text(Fmt.amps2(server.amps)).monospacedDigit().foregroundStyle(server.amps == 0 ? Color.secondary : Color.primary) }.width(min: 84, ideal: 84, max: 84)
             TableColumn("") { _ in EmptyView() }
         }
+        .frame(minHeight: 180, maxHeight: .infinity)
         .overlay {
             if servers.isEmpty {
                 ContentUnavailableView("No servers yet", systemImage: "server.rack",

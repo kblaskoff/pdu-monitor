@@ -32,7 +32,7 @@ struct ContentView: View {
                 SettingsLink { Label("Racks & PDUs", systemImage: "gearshape") }.help("Add racks and PDUs, change limits")
             }
         }
-        .frame(minWidth: 900, minHeight: 600)
+        .frame(minWidth: 900, idealWidth: 1180, minHeight: 600, idealHeight: 760)
     }
 }
 

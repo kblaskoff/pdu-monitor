@@ -23,6 +23,7 @@ struct PDUView: View {
                 }
             }
             .padding(20)
+            .frame(maxHeight: .infinity, alignment: .top)
             .navigationTitle("PDU \(config.name)")
             .onChange(of: outlets.map(\.number)) { _, numbers in selection = selection.intersection(numbers) }
         } else {

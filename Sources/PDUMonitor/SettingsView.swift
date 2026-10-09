@@ -225,6 +225,14 @@ struct GeneralSettings: View {
             Section("Updates") {
                 UpdatesRow()
             }
+            Section("Backup") {
+                HStack {
+                    Text("Racks, PDUs, server names and settings as one file: to keep, or to set up another Mac.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Export…") { BackupUI.export(model) }
+                    Button("Import…") { BackupUI.importSettings(model) }.disabled(model.busy)
+                }
+            }
             Section("Problems") {
                 HStack {
                     Text("Every network request and every error is written to a log file.").font(.caption).foregroundStyle(.secondary)
