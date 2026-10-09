@@ -123,7 +123,7 @@ struct DeviceEditor: View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
                 Section {
-                    TextField("Name", text: $device.name, prompt: Text("P200A"))
+                    TextField("Name", text: $device.name, prompt: Text("e.g. P200A (empty = the address)"))
                     Picker("Rack", selection: $device.rackID) { ForEach(model.racks) { Text($0.name).tag($0.id) } }
                     Picker("Vendor", selection: $device.vendor) { ForEach(PDUVendor.allCases) { Text($0.displayName).tag($0) } }
                 }
@@ -148,7 +148,10 @@ struct DeviceEditor: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(isNew ? "Add" : "Save") { save() }.keyboardShortcut(.defaultAction).disabled(!valid)
+                Button(isNew ? "Add" : "Save") { save() }.keyboardShortcut(.defaultAction).disabled(problem != nil)
+            }
+            .overlay(alignment: .leading) {
+                if let problem { Text(problem).font(.callout).foregroundStyle(.orange).padding(.leading, 20) }
             }
             .padding([.horizontal, .bottom], 20)
         }
@@ -156,15 +159,20 @@ struct DeviceEditor: View {
         .onAppear { bankLimitText = device.bankMaxAmps.map { Fmt.limit($0) } ?? "" }
     }
 
-    private var valid: Bool {
-        !device.name.trimmingCharacters(in: .whitespaces).isEmpty && !device.host.trimmingCharacters(in: .whitespaces).isEmpty
-            && device.port > 0 && device.port < 65536 && device.maxAmps > 0
+    /// Why the button is not active (shown next to it), or nil when the device can be saved.
+    private var problem: String? {
+        if device.host.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter the address of the PDU." }
+        if device.port <= 0 || device.port >= 65536 { return "The port must be between 1 and 65535 (usually 161)." }
+        if device.maxAmps <= 0 { return "The PDU limit must be more than 0 A." }
+        if model.racks.isEmpty { return "Add a rack first." }
+        return nil
     }
 
     private func normalized() -> DeviceConfig {
         var d = device
-        d.name = d.name.trimmingCharacters(in: .whitespaces)
         d.host = d.host.trimmingCharacters(in: .whitespaces)
+        d.name = d.name.trimmingCharacters(in: .whitespaces)
+        if d.name.isEmpty { d.name = d.host }
         d.bankMaxAmps = Double(bankLimitText.replacingOccurrences(of: ",", with: "."))
         return d
     }
