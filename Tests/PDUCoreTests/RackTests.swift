@@ -114,3 +114,37 @@ final class RackTests: XCTestCase {
         XCTAssertNil(labels.label(rack: rack, id: "200U31"))
     }
 }
+
+final class DemoLabTests: XCTestCase {
+    func testDemoRacksShowEveryStatusAndTheUnmeteredPDUReportsItsLoad() async throws {
+        let lab = DemoLab.make()
+        var statuses: [String: LimitStatus] = [:]
+        for rack in lab.racks {
+            var pdus: [PDUState] = []
+            for config in lab.devices where config.rackID == rack.id {
+                pdus.append(PDUState(config: config, snapshot: try await lab.drivers[config.id]!.poll()))
+            }
+            statuses[rack.name] = RackSummarizer.summary(rack: rack, pdus: pdus).status
+            // the unmetered APC (first PDU of each rack) has no outlet figures but does report the whole-unit load
+            XCTAssertNil(pdus[0].snapshot?.outlets[0].amps)
+            XCTAssertGreaterThan(pdus[0].amps ?? 0, 1)
+        }
+        XCTAssertEqual(statuses["100"], .ok)
+        XCTAssertEqual(statuses["200"], .warning)
+        XCTAssertEqual(statuses["20F"], .over)
+    }
+
+    func testSimulatedRestartThroughTheSequencer() async throws {
+        let lab = DemoLab.make()
+        let id = lab.devices[1].id
+        struct Controller: OutletController {
+            let driver: PDUDriver
+            func set(_ t: OutletTarget, on: Bool) async throws { try await driver.setOutlet(t.outlet, on: on) }
+            func state(_ t: OutletTarget) async throws -> Bool? { try await driver.outletState(t.outlet) }
+        }
+        let sequencer = PowerSequencer(controller: Controller(driver: lab.drivers[id]!), sleep: { _ in })
+        try await sequencer.run(.restart(delay: 5), targets: [OutletTarget(pduID: id, outlet: 1)])
+        let state = try await lab.drivers[id]!.outletState(1)
+        XCTAssertEqual(state, true)
+    }
+}

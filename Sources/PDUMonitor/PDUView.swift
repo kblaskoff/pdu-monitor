@@ -13,14 +13,12 @@ struct PDUView: View {
             let status = state.status(warnFraction: model.settings.warnFraction)
             VStack(alignment: .leading, spacing: 14) {
                 header(state, status)
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        outletTable(outlets, dimmed: state.error != nil)
-                        PowerActionBar(noun: "port", selectedCount: selection.count,
-                                       targets: { selection.sorted().map { OutletTarget(pduID: pduID, outlet: $0) } },
-                                       selectAll: { selection = Set(outlets.map(\.number)) }, clear: { selection = [] })
-                        totals(state)
-                    }
+                outletTable(outlets, dimmed: state.error != nil)
+                PowerActionBar(noun: "port", selectedCount: selection.count,
+                               targets: { selection.sorted().map { OutletTarget(pduID: pduID, outlet: $0) } },
+                               selectAll: { selection = Set(outlets.map(\.number)) }, clear: { selection = [] })
+                HStack(alignment: .top, spacing: 24) {
+                    totals(state)
                     infoPanel(state)
                 }
             }
@@ -71,7 +69,7 @@ struct PDUView: View {
             }.width(86)
         }
         .opacity(dimmed ? 0.55 : 1)
-        .frame(minHeight: 260)
+        .frame(minHeight: 240, maxHeight: .infinity)
     }
 
     private func totals(_ state: PDUState) -> some View {
@@ -102,24 +100,29 @@ struct PDUView: View {
     private func infoPanel(_ state: PDUState) -> some View {
         let info = state.snapshot?.info
         return VStack(alignment: .leading, spacing: 6) {
-            Text("Device").font(.headline)
-            InfoRow(title: "Vendor", value: state.config.vendor.displayName)
-            InfoRow(title: "Model", value: info?.model ?? "—")
-            InfoRow(title: "Outlets", value: info.map { String($0.outletCount) } ?? "—")
-            InfoRow(title: "Breakers", value: info?.breakerCount.map(String.init) ?? "—")
-            InfoRow(title: "Orientation", value: info?.orientation ?? "—")
-            InfoRow(title: "Voltage", value: info?.lineVoltage.map { "\(Fmt.limit($0)) V" } ?? "—")
-            InfoRow(title: "Firmware", value: info?.firmware ?? "—")
-            InfoRow(title: "Serial", value: info?.serial ?? "—")
-            InfoRow(title: "Address", value: "\(state.config.host):\(state.config.port)")
-            InfoRow(title: "PDU limit", value: "\(Fmt.limit(state.config.maxAmps)) A")
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    InfoRow(title: "Vendor", value: state.config.vendor.displayName)
+                    InfoRow(title: "Model", value: info?.model ?? "—")
+                    InfoRow(title: "Outlets", value: info.map { String($0.outletCount) } ?? "—")
+                    InfoRow(title: "Breakers", value: info?.breakerCount.map(String.init) ?? "—")
+                    InfoRow(title: "Orientation", value: info?.orientation ?? "—")
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    InfoRow(title: "Voltage", value: info?.lineVoltage.map { "\(Fmt.limit($0)) V" } ?? "—")
+                    InfoRow(title: "Firmware", value: info?.firmware ?? "—")
+                    InfoRow(title: "Serial", value: info?.serial ?? "—")
+                    InfoRow(title: "Address", value: "\(state.config.host):\(state.config.port)")
+                    InfoRow(title: "PDU limit", value: "\(Fmt.limit(state.config.maxAmps)) A")
+                }
+            }
             if state.snapshot != nil, state.snapshot?.hasOutletMetering == false {
                 Text("This PDU does not measure single outlets, only banks and the whole unit.").font(.caption).foregroundStyle(.secondary)
-                    .padding(.leading, 4).padding(.top, 4)
+                    .padding(.leading, 4).padding(.top, 2)
             }
         }
-        .padding(14)
-        .frame(width: 300, alignment: .leading)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.25)))
     }

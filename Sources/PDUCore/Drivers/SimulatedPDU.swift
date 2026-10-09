@@ -29,22 +29,24 @@ public final class SimulatedPDU: PDUDriver, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         tick += 1
         var outlets: [OutletReading] = []
+        var truth: [Int: Double] = [:]          // what the outlet really draws, also when the PDU cannot measure it
         for n in 1...outletCount {
             let on = states[n] ?? true
             let base = on ? (loads[n]?.amps ?? 0) : 0
             // A little movement so that the screens look alive.
             let wobble = base > 0 ? sin(Double(tick + n) / 3) * 0.05 * base : 0
             let amps = max(0, ((base + wobble) * 10).rounded() / 10)
+            truth[n] = amps
             outlets.append(OutletReading(number: n, name: names[n] ?? "Outlet_\(n)", bank: (n - 1) * banks / outletCount + 1, isOn: on,
                                          amps: metered ? amps : nil, watts: metered ? (amps * volts * 0.95).rounded() : nil))
         }
         var bankReadings: [BankReading] = []
         for b in 1...banks {
-            let sum = outlets.filter { $0.bank == b }.compactMap(\.amps).reduce(0, +)
+            let sum = outlets.filter { $0.bank == b }.reduce(0.0) { $0 + (truth[$1.number] ?? 0) }
             bankReadings.append(BankReading(number: b, amps: (sum * 10).rounded() / 10))
         }
         let total = bankReadings.reduce(0) { $0 + $1.amps }
-        let watts = outlets.compactMap(\.watts).reduce(0, +) + (metered ? 0 : (total * volts * 0.95).rounded())
+        let watts = (total * volts * 0.95).rounded()
         let info = PDUInfo(vendor: vendor, model: model, name: nil, serial: nil, firmware: nil, outletCount: outletCount, breakerCount: banks,
                            orientation: outletCount > 16 ? "Vertical" : "Horizontal", lineVoltage: volts)
         let phase = PhaseReading(number: 1, amps: total, watts: watts, volts: volts)

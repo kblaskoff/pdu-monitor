@@ -65,8 +65,10 @@ struct OverviewView: View {
 
     private var list: some View {
         Table(model.orderedRacks) {
-            TableColumn("Rack") { rack in Text(rack.name).font(.body.weight(.semibold)) }
-            TableColumn("kW") { rack in Text(Fmt.kw(model.summary(of: rack).watts)).monospacedDigit() }.width(70)
+            TableColumn("Rack") { rack in
+                Button(rack.name) { model.route = .rack(rack.id) }.buttonStyle(.link).font(.body.weight(.semibold))
+            }.width(min: 70, ideal: 110)
+            TableColumn("kW") { rack in Text(Fmt.kw(model.summary(of: rack).watts)).monospacedDigit() }.width(60)
             TableColumn("Amps") { rack in
                 let s = model.summary(of: rack)
                 Text(Fmt.amps(s.amps)).monospacedDigit().foregroundStyle(s.status.color)
@@ -75,11 +77,10 @@ struct OverviewView: View {
             TableColumn("Load") { rack in
                 let s = model.summary(of: rack)
                 HStack { LimitBar(fraction: s.fraction, status: s.status, height: 8); Text(Fmt.percent(s.fraction)).monospacedDigit().frame(width: 44, alignment: .trailing) }
-            }.width(min: 120, ideal: 180)
-            TableColumn("Status") { rack in StatusPill(status: model.summary(of: rack).attention) }.width(110)
-            TableColumn("") { rack in Button("Open") { model.route = .rack(rack.id) } }.width(70)
+            }.width(min: 120, ideal: 200)
+            TableColumn("Status") { rack in StatusPill(status: model.summary(of: rack).attention) }.width(min: 100, ideal: 120)
         }
-        .frame(minHeight: CGFloat(model.racks.count) * 30 + 40)
+        .frame(height: CGFloat(model.racks.count) * 28 + 70)
     }
 }
 

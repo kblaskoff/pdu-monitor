@@ -175,7 +175,7 @@ struct InfoRow: View {
     let title: String, value: String
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title).foregroundStyle(.secondary).frame(width: 120, alignment: .trailing)
+            Text(title).foregroundStyle(.secondary).frame(width: 84, alignment: .trailing)
             Text(value).textSelection(.enabled)
             Spacer(minLength: 0)
         }
