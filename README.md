@@ -7,8 +7,9 @@ switching servers **On / Off / Restart** with a confirmation pop-up. It replaces
 * **Rack** – servers with the ports of both PDUs joined into one line (the outlet name, for example `200U31`, is the key), the PDUs of the rack with their own limits, total rack power.
 * **PDU** – every outlet (state, A, W), totals per phase and bank, device information.
 * **Control** – tick servers or ports, choose Restart / On / Off, confirm. A restart switches **all** ports of a server off, waits until the PDUs confirm it, pauses (default 8 s, 3–60 s in the settings) and switches them on again. If one PDU does not switch off, the ports already switched off are switched back on.
-* **Devices** – CyberPower (ePDU2: PDU81xxx and similar) and APC (rPDU2 firmware, and the older rPDU/sPDU MIBs; tested model family AP7932) over **SNMP v1**. Read and write communities are set per device and kept in the macOS Keychain.
+* **Devices** – CyberPower (current ePDU2 models: switched / metered / monitored, 1 or 3 phases; and the older ePDU "SW" models) and APC (rPDU2: AP84xx/86xx/88xx/89xx and similar; the older rPDU/sPDU MIBs: AP7xxx, AP9xxx, tested family AP7932) over **SNMP v1**. Models are recognized by what they answer, not by the model number; a PDU that cannot measure single outlets shows "—". For three-phase PDUs the busiest phase is compared with the limit. Read and write communities are set per device and kept in the macOS Keychain.
 * **Updates** – built in (Sparkle); see [docs/UPDATES.md](docs/UPDATES.md).
+* **Backup** – Settings → General → Export / Import: racks, PDUs, server names and settings as one JSON file (the SNMP communities only if you tick the box).
 * **Demo mode** (Settings → General) shows sample racks without touching any PDU.
 
 ## Install
