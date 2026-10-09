@@ -67,6 +67,10 @@ final class SnapshotTests: XCTestCase {
         }
         model.route = .overview
         try render(SettingsView().environmentObject(model), size: CGSize(width: 640, height: 460), dark: false, name: "settings", in: folder)
+        if let device = model.devices.first {
+            try render(DeviceEditor(device: device, isNew: false, onClose: {}).environmentObject(model).padding(20),
+                       size: CGSize(width: 700, height: 580), dark: false, name: "device-editor", in: folder)
+        }
         model.settings.demoMode = false
     }
 }

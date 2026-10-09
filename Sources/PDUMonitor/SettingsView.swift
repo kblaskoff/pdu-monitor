@@ -10,7 +10,7 @@ struct SettingsView: View {
             DevicesSettings().tabItem { Label("PDUs", systemImage: "powerplug") }
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
         }
-        .frame(width: 640, height: 460)
+        .frame(width: 700, height: 580)
     }
 }
 
@@ -65,6 +65,14 @@ struct DevicesSettings: View {
     @State private var confirmDelete: DeviceConfig?
 
     var body: some View {
+        if let device = editing {
+            DeviceEditor(device: device, isNew: isNew, onClose: { editing = nil }).id(device.id)
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("SNMP v1 is used. The community string is kept in the macOS Keychain.").font(.callout).foregroundStyle(.secondary)
             if model.settings.demoMode {
@@ -99,7 +107,6 @@ struct DevicesSettings: View {
             }
         }
         .padding(20)
-        .sheet(item: $editing) { device in DeviceEditor(device: device, isNew: isNew) }
         .alert("Delete PDU \(confirmDelete?.name ?? "")?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }), presenting: confirmDelete) { device in
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { model.deleteDevice(device.id) }
@@ -111,9 +118,9 @@ struct DevicesSettings: View {
 
 struct DeviceEditor: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
     @State var device: DeviceConfig
     let isNew: Bool
+    let onClose: () -> Void
     @State private var bankLimitText = ""
     @State private var testing = false
     @State private var testResult: String?
@@ -147,7 +154,7 @@ struct DeviceEditor: View {
             .formStyle(.grouped)
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel", role: .cancel) { onClose() }.keyboardShortcut(.cancelAction)
                 Button(isNew ? "Add" : "Save") { save() }.keyboardShortcut(.defaultAction).disabled(problem != nil)
             }
             .overlay(alignment: .leading) {
@@ -155,7 +162,6 @@ struct DeviceEditor: View {
             }
             .padding([.horizontal, .bottom], 20)
         }
-        .frame(width: 520, height: 600)
         .onAppear { bankLimitText = device.bankMaxAmps.map { Fmt.limit($0) } ?? "" }
     }
 
@@ -180,7 +186,7 @@ struct DeviceEditor: View {
     private func save() {
         let d = normalized()
         if isNew { model.addDevice(d) } else { model.updateDevice(d) }
-        dismiss()
+        onClose()
     }
 
     private func runTest() {
