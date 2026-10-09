@@ -85,6 +85,8 @@ public struct PDUSnapshot: Equatable, Sendable {
     }
 
     static func derivedAmps(phases: [PhaseReading], banks: [BankReading], outlets: [OutletReading]) -> Double? {
+        // A three-phase PDU is limited per phase: the busiest phase is what is compared with the limit.
+        if phases.count > 1 { return phases.map(\.amps).max() }
         if !phases.isEmpty { return phases.reduce(0) { $0 + $1.amps } }
         if !banks.isEmpty { return banks.reduce(0) { $0 + $1.amps } }
         let metered = outlets.compactMap(\.amps)

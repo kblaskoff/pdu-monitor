@@ -219,4 +219,89 @@ final class DriverTests: XCTestCase {
         do { _ = try await agent.transport.getAvailable([OID("1.3.6.1.2.1.1.1.0")!]); XCTFail() }
         catch { XCTAssertEqual(error as? SNMPError, .tooBig) }
     }
+
+    // MARK: other models
+
+    func testCyberPowerLegacyEPDU() async throws {
+        let agent = try FakeAgent(); defer { agent.stop() }
+        let l = "1.3.6.1.4.1.3808.1.1.3"
+        agent["\(l).1.5.0"] = .octetString(Array("PDU20SWHVIEC8FNET".utf8))
+        agent["\(l).1.8.0"] = .integer(8)
+        agent["\(l).1.9.0"] = .integer(1)
+        agent["\(l).2.3.1.1.2.1"] = .unsigned(52); agent["\(l).2.3.1.1.4.1"] = .integer(1); agent["\(l).2.3.1.1.5.1"] = .integer(0)
+        agent["\(l).2.3.1.1.7.1"] = .integer(1196)
+        for i in 1...8 {
+            agent["\(l).3.3.1.1.2.\(i)"] = .octetString(Array((i == 1 ? "100U5" : "Outlet\(i)").utf8))
+            agent["\(l).3.3.1.1.4.\(i)"] = .integer(1)
+            agent["\(l).3.5.1.1.4.\(i)"] = .integer(1)
+            agent["\(l).3.5.1.1.7.\(i)"] = .unsigned(i == 1 ? 12 : 0)
+            agent["\(l).3.5.1.1.8.\(i)"] = .unsigned(i == 1 ? 276 : 0)
+        }
+        agent.onSet = { oid, value, agent in
+            let c = oid.components
+            if Array(c.dropLast().suffix(5)) == [3, 3, 1, 1, 4], let i = c.last { agent.set(OID("\(l).3.5.1.1.4.\(i)")!, value) }
+        }
+        let driver = CyberPowerDriver(transport: agent.transport)
+        let snapshot = try await driver.poll()
+        XCTAssertEqual(snapshot.info.model, "PDU20SWHVIEC8FNET")
+        XCTAssertEqual(snapshot.outlets.count, 8)
+        XCTAssertEqual(snapshot.outlets[0].name, "100U5")
+        XCTAssertEqual(snapshot.outlets[0].watts, 276)
+        XCTAssertEqual(snapshot.totalAmps ?? 0, 5.2, accuracy: 0.001)
+        XCTAssertEqual(snapshot.totalWatts, 1196)
+        try await driver.setOutlet(1, on: false)
+        XCTAssertEqual(agent["\(l).3.3.1.1.4.1"], .integer(2))
+        let state = try await driver.outletState(1)
+        XCTAssertEqual(state, false)
+    }
+
+    func testCyberPowerMonitoredOnlyModelShowsNamesWithoutSwitching() async throws {
+        let agent = try FakeAgent(); defer { agent.stop() }
+        agent["\(cps).3.3.1.5.1"] = .integer(4)
+        agent["\(cps).3.3.1.8.1"] = .integer(1)
+        agent["\(cps).3.4.1.5.1"] = .unsigned(60)
+        agent["\(cps).4.4.1.5.1"] = .unsigned(60)
+        for i in 1...4 { agent["\(cps).6.3.4.1.4.\(i)"] = .octetString(Array((i == 2 ? "300U7" : "Outlet_\(i)").utf8)) }
+        let snapshot = try await CyberPowerDriver(transport: agent.transport).poll()
+        XCTAssertEqual(snapshot.outlets[1].name, "300U7")
+        XCTAssertNil(snapshot.outlets[1].isOn)
+        XCTAssertNil(snapshot.outlets[1].amps)
+        XCTAssertEqual(snapshot.totalAmps ?? 0, 6.0, accuracy: 0.001)
+        XCTAssertTrue(snapshot.banks.isEmpty)
+    }
+
+    func testThreePhasePDUUsesTheBusiestPhase() async throws {
+        let agent = try FakeAgent(); defer { agent.stop() }
+        agent["\(cps).3.3.1.5.1"] = .integer(2)
+        agent["\(cps).3.3.1.8.1"] = .integer(3)
+        for (i, tenths) in [100, 160, 80].enumerated() {
+            agent["\(cps).4.4.1.5.\(i + 1)"] = .unsigned(UInt64(tenths))
+            agent["\(cps).4.4.1.7.\(i + 1)"] = .unsigned(2000)
+        }
+        let snapshot = try await CyberPowerDriver(transport: agent.transport).poll()
+        XCTAssertEqual(snapshot.phases.count, 3)
+        XCTAssertEqual(snapshot.totalAmps ?? 0, 16.0, accuracy: 0.001)
+        XCTAssertEqual(snapshot.totalWatts, 6000)
+    }
+
+    func testAPCMeteredOnlyRPDU2() async throws {
+        let agent = try FakeAgent(); defer { agent.stop() }
+        agent["\(apc).26.4.2.1.4.1"] = .integer(8)
+        agent["\(apc).26.4.2.1.7.1"] = .integer(1)
+        agent["\(apc).26.6.3.1.5.1"] = .integer(24)
+        for i in 1...8 {
+            agent["\(apc).26.9.4.3.1.3.\(i)"] = .octetString(Array((i == 3 ? "N100U40" : "Outlet_\(i)").utf8))
+            agent["\(apc).26.9.4.3.1.6.\(i)"] = .integer(i == 3 ? 12 : 0)
+            agent["\(apc).26.9.4.3.1.7.\(i)"] = .integer(i == 3 ? 276 : 0)
+        }
+        let driver = APCDriver(transport: agent.transport)
+        let first = try await driver.poll()
+        let second = try await driver.poll()          // the second poll asks only for the tables the first one found
+        for snapshot in [first, second] {
+            XCTAssertEqual(snapshot.outlets[2].name, "N100U40")
+            XCTAssertEqual(snapshot.outlets[2].watts, 276)
+            XCTAssertEqual(snapshot.outlets[2].amps ?? 0, 1.2, accuracy: 0.001)
+            XCTAssertNil(snapshot.outlets[2].isOn)
+        }
+    }
 }

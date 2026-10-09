@@ -18,17 +18,16 @@ public enum ServerID {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: " ", with: "")
     }
 
-    /// Network gear is named with an N in front of the rack-unit id: "N200U43". Everything else is a server.
+    /// Network gear is named with an N in front of the rack-unit id: "N200U43", "N10FU30" (N, the rack, U, the unit).
     public static func kind(of name: String) -> DeviceKind {
         let upper = name.trimmingCharacters(in: .whitespaces).uppercased()
         guard upper.hasPrefix("N") else { return .server }
         let rest = upper.dropFirst()
-        // "N" + digits + "U" + digits, e.g. N200U43
-        let digits = rest.prefix { $0.isNumber }
-        guard !digits.isEmpty else { return .server }
-        let afterDigits = rest.dropFirst(digits.count)
-        guard afterDigits.first == "U", afterDigits.dropFirst().first?.isNumber == true else { return .server }
-        return .network
+        // the rack id starts with a digit and may have letters (200, 10F, 20E), then U and the unit number
+        guard rest.first?.isNumber == true, let u = rest.lastIndex(of: "U") else { return .server }
+        let rack = rest[rest.startIndex..<u]
+        let unit = rest[rest.index(after: u)...].prefix { $0.isNumber }
+        return (!rack.isEmpty && rack.allSatisfy { $0.isNumber || $0.isLetter } && !unit.isEmpty) ? .network : .server
     }
 }
 

@@ -8,6 +8,7 @@ public final class APCDriver: PDUDriver, @unchecked Sendable {
     private enum Flavor { case rPDU2, legacy }
     private let lock = NSLock()
     private var detected: Flavor?
+    private var tables: (switched: Bool, metered: Bool)?
     public init(transport: SNMPTransport) { self.transport = transport }
 
     static let apc: [UInt32] = [1, 3, 6, 1, 4, 1, 318, 1, 1]
@@ -24,6 +25,7 @@ public final class APCDriver: PDUDriver, @unchecked Sendable {
     static let r2OutletBank = [26, 9, 2, 2, 1, 6] as [UInt32]
     static let r2OutletCommand = [26, 9, 2, 4, 1, 5] as [UInt32]       // 1 on, 2 off
     static let r2MeteredCurrent = [26, 9, 4, 3, 1, 6] as [UInt32], r2MeteredPower = [26, 9, 4, 3, 1, 7] as [UInt32]
+    static let r2MeteredName = [26, 9, 4, 3, 1, 3] as [UInt32], r2MeteredBank = [26, 9, 4, 2, 1, 7] as [UInt32]
 
     // rPDU / sPDU (older firmware)
     static let lName = [12, 1, 1] as [UInt32], lFirmware = [12, 1, 3] as [UInt32], lModel = [12, 1, 5] as [UInt32], lSerial = [12, 1, 6] as [UInt32]
@@ -77,16 +79,22 @@ public final class APCDriver: PDUDriver, @unchecked Sendable {
             Self.oid(Self.r2DevicePower, 1)
         ])
         guard let outletCount = head.int(Self.oid(Self.r2NumOutlets, 1)), outletCount > 0 else { throw DriverError.notRecognized("APC") }
-        let phaseCount = max(1, head.int(Self.oid(Self.r2NumPhases, 1)) ?? 1)
+        let phaseCount = min(3, max(1, head.int(Self.oid(Self.r2NumPhases, 1)) ?? 1))
         let bankCount = head.int(Self.oid(Self.r2NumBanks, 1)) ?? 0
         var wanted: [OID] = []
         for p in 1...phaseCount { wanted += [Self.oid(Self.r2PhaseCurrent, p), Self.oid(Self.r2PhaseVolts, p), Self.oid(Self.r2PhasePower, p)] }
         if bankCount > 0 { for b in 1...bankCount { wanted.append(Self.oid(Self.r2BankCurrent, b)) } }
+        let known = lock.withLock { tables }
         for o in 1...outletCount {
-            wanted += [Self.oid(Self.r2OutletName, o), Self.oid(Self.r2OutletState, o), Self.oid(Self.r2OutletBank, o),
-                       Self.oid(Self.r2MeteredCurrent, o), Self.oid(Self.r2MeteredPower, o)]
+            if known?.switched ?? true { wanted += [Self.oid(Self.r2OutletName, o), Self.oid(Self.r2OutletState, o), Self.oid(Self.r2OutletBank, o)] }
+            if known?.metered ?? true { wanted += [Self.oid(Self.r2MeteredName, o), Self.oid(Self.r2MeteredBank, o), Self.oid(Self.r2MeteredCurrent, o), Self.oid(Self.r2MeteredPower, o)] }
         }
         let values = try await transport.getAvailable(wanted)
+        if known == nil {
+            let found = (switched: values[Self.oid(Self.r2OutletState, 1)] != nil,
+                         metered: values[Self.oid(Self.r2MeteredCurrent, 1)] != nil || values[Self.oid(Self.r2MeteredPower, 1)] != nil || values[Self.oid(Self.r2MeteredName, 1)] != nil)
+            lock.withLock { tables = found }
+        }
         let phases: [PhaseReading] = (1...phaseCount).compactMap { p in
             guard let amps = values.tenths(Self.oid(Self.r2PhaseCurrent, p)) else { return nil }
             let kw = values.int(Self.oid(Self.r2PhasePower, p)).flatMap { $0 >= 0 ? Double($0) * 10 : nil }
@@ -94,8 +102,8 @@ public final class APCDriver: PDUDriver, @unchecked Sendable {
             return PhaseReading(number: p, amps: amps, watts: kw, volts: volts)
         }
         let outlets: [OutletReading] = (1...outletCount).map { o in
-            OutletReading(number: o, name: values.string(Self.oid(Self.r2OutletName, o)) ?? "",
-                          bank: values.int(Self.oid(Self.r2OutletBank, o)),
+            OutletReading(number: o, name: values.string(Self.oid(Self.r2OutletName, o)) ?? values.string(Self.oid(Self.r2MeteredName, o)) ?? "",
+                          bank: values.int(Self.oid(Self.r2OutletBank, o)) ?? values.int(Self.oid(Self.r2MeteredBank, o)),
                           isOn: values.int(Self.oid(Self.r2OutletState, o)).map { $0 == 2 },
                           amps: values.tenths(Self.oid(Self.r2MeteredCurrent, o)),
                           watts: values.int(Self.oid(Self.r2MeteredPower, o)).flatMap { $0 >= 0 ? Double($0) : nil })

@@ -14,6 +14,10 @@ final class RackTests: XCTestCase {
         XCTAssertEqual(ServerID.kind(of: "200U43"), .server)
         XCTAssertEqual(ServerID.kind(of: "NAS01"), .server)
         XCTAssertEqual(ServerID.kind(of: "n12u3"), .network)
+        XCTAssertEqual(ServerID.kind(of: "N10FU30"), .network)
+        XCTAssertEqual(ServerID.kind(of: "N20EU4"), .network)
+        XCTAssertEqual(ServerID.kind(of: "10FU30"), .server)
+        XCTAssertEqual(ServerID.kind(of: "NU5"), .server)
         XCTAssertEqual(ServerID.key(" 200u31 "), "200u31")
     }
 
