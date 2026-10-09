@@ -67,6 +67,12 @@ final class SnapshotTests: XCTestCase {
         }
         model.route = .overview
         try render(SettingsView().environmentObject(model), size: CGSize(width: 640, height: 460), dark: false, name: "settings", in: folder)
+        if let rack = model.racks.first(where: { $0.name == "200" }) {
+            // a rack with six PDUs: the cards must wrap to new rows, not widen the window
+            for i in 1...4 { model.addDevice(DeviceConfig(name: "P200\(["C", "D", "E", "F"][i - 1])", rackID: rack.id, vendor: .cyberPower, host: "10.0.0.\(i)")) }
+            model.route = .rack(rack.id)
+            try render(ContentView().environmentObject(model), size: size, dark: true, name: "rack-200-six-pdus", in: folder)
+        }
         if let device = model.devices.first {
             try render(DeviceEditor(device: device, isNew: false, onClose: {}).environmentObject(model).padding(20),
                        size: CGSize(width: 700, height: 580), dark: false, name: "device-editor", in: folder)
