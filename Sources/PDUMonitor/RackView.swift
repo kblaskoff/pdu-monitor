@@ -82,28 +82,28 @@ struct RackView: View {
 
     private func serverTable(_ servers: [ServerEntry]) -> some View {
         Table(servers) {
-            TableColumn("") { server in Toggle("", isOn: selectionBinding($selection, server.key)).labelsHidden() }.width(26)
+            TableColumn("") { server in Toggle("", isOn: selectionBinding($selection, server.key)).labelsHidden() }.width(min: 26, ideal: 26, max: 26)
             TableColumn("Server") { server in
                 VStack(alignment: .leading, spacing: 0) {
                     Text(server.name).font(.body.weight(.semibold))
                     if let label = model.label(of: server, rack: rackID) { Text(label).font(.caption).foregroundStyle(.secondary) }
                 }
                 .contextMenu { Button("Rename…") { renaming = server } }
-            }.width(min: 90, ideal: 120, max: 170)
+            }.width(min: 90, ideal: 120, max: 150)
             TableColumn("Type") { server in
                 Text(server.kind.displayName).foregroundStyle(server.kind == .network ? Color.yellow : Color.green)
-            }.width(70)
+            }.width(min: 70, ideal: 70, max: 70)
             TableColumn("Ports") { server in
                 Text(server.ports.map { "\($0.pduName) #\($0.target.outlet)" }.joined(separator: " · ")).foregroundStyle(.secondary)
-            }.width(min: 120, ideal: 190, max: 270)
+            }.width(min: 120, ideal: 170, max: 230)
             TableColumn("State") { server in
                 HStack(spacing: 5) {
                     PowerDot(isOn: server.power.dotValue)
                     if server.power == .mixed { Text("partly").font(.caption).foregroundStyle(.orange) }
                 }
-            }.width(90)
-            TableColumn("Power (W)") { server in Text(Fmt.watts(server.watts)).monospacedDigit().foregroundStyle(server.watts == 0 ? Color.secondary : Color.primary) }.width(80)
-            TableColumn("Current (A)") { server in Text(Fmt.amps2(server.amps)).monospacedDigit().foregroundStyle(server.amps == 0 ? Color.secondary : Color.primary) }.width(90)
+            }.width(min: 90, ideal: 90, max: 90)
+            TableColumn("Power (W)") { server in Text(Fmt.watts(server.watts)).monospacedDigit().foregroundStyle(server.watts == 0 ? Color.secondary : Color.primary) }.width(min: 80, ideal: 80, max: 80)
+            TableColumn("Current (A)") { server in Text(Fmt.amps2(server.amps)).monospacedDigit().foregroundStyle(server.amps == 0 ? Color.secondary : Color.primary) }.width(min: 90, ideal: 90, max: 90)
             TableColumn("") { _ in EmptyView() }
         }
         .overlay {

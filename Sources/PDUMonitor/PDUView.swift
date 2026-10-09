@@ -53,20 +53,20 @@ struct PDUView: View {
 
     private func outletTable(_ outlets: [OutletReading], dimmed: Bool) -> some View {
         Table(outlets) {
-            TableColumn("") { outlet in Toggle("", isOn: selectionBinding($selection, outlet.number)).labelsHidden() }.width(26)
-            TableColumn("Outlet") { outlet in Text("\(outlet.number)").monospacedDigit() }.width(52)
+            TableColumn("") { outlet in Toggle("", isOn: selectionBinding($selection, outlet.number)).labelsHidden() }.width(min: 26, ideal: 26, max: 26)
+            TableColumn("Outlet") { outlet in Text("\(outlet.number)").monospacedDigit() }.width(min: 52, ideal: 52, max: 52)
             TableColumn("Server") { outlet in
                 Text(outlet.isAssigned ? outlet.name : "—").foregroundStyle(outlet.isAssigned ? Color.primary : Color.secondary)
                     .font(outlet.isAssigned ? .body.weight(.semibold) : .body)
             }.width(min: 90, ideal: 130, max: 180)
-            TableColumn("Bank") { outlet in Text(outlet.bank.map(String.init) ?? "—").foregroundStyle(.secondary) }.width(44)
-            TableColumn("State") { outlet in PowerDot(isOn: outlet.isOn) }.width(70)
+            TableColumn("Bank") { outlet in Text(outlet.bank.map(String.init) ?? "—").foregroundStyle(.secondary) }.width(min: 44, ideal: 44, max: 44)
+            TableColumn("State") { outlet in PowerDot(isOn: outlet.isOn) }.width(min: 70, ideal: 70, max: 70)
             TableColumn("Current (A)") { outlet in
                 Text(Fmt.amps(outlet.amps)).monospacedDigit().foregroundStyle(outlet.amps == nil || outlet.amps == 0 ? Color.secondary : Color.primary)
-            }.width(86)
+            }.width(min: 86, ideal: 86, max: 86)
             TableColumn("Power (W)") { outlet in
                 Text(Fmt.watts(outlet.watts)).monospacedDigit().foregroundStyle(outlet.watts == nil || outlet.watts == 0 ? Color.secondary : Color.primary)
-            }.width(86)
+            }.width(min: 86, ideal: 86, max: 86)
             TableColumn("") { _ in EmptyView() }
         }
         .opacity(dimmed ? 0.55 : 1)

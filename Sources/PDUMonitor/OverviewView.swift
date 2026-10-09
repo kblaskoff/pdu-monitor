@@ -68,12 +68,12 @@ struct OverviewView: View {
             TableColumn("Rack") { rack in
                 Button(rack.name) { model.route = .rack(rack.id) }.buttonStyle(.link).font(.body.weight(.semibold))
             }.width(min: 70, ideal: 110, max: 160)
-            TableColumn("kW") { rack in Text(Fmt.kw(model.summary(of: rack).watts)).monospacedDigit() }.width(60)
+            TableColumn("kW") { rack in Text(Fmt.kw(model.summary(of: rack).watts)).monospacedDigit() }.width(min: 60, ideal: 60, max: 60)
             TableColumn("Amps") { rack in
                 let s = model.summary(of: rack)
                 Text(Fmt.amps(s.amps)).monospacedDigit().foregroundStyle(s.status.color)
-            }.width(70)
-            TableColumn("Limit") { rack in Text("\(Fmt.limit(rack.maxAmps)) A").monospacedDigit() }.width(70)
+            }.width(min: 70, ideal: 70, max: 70)
+            TableColumn("Limit") { rack in Text("\(Fmt.limit(rack.maxAmps)) A").monospacedDigit() }.width(min: 70, ideal: 70, max: 70)
             TableColumn("Load") { rack in
                 let s = model.summary(of: rack)
                 HStack { LimitBar(fraction: s.fraction, status: s.status, height: 8); Text(Fmt.percent(s.fraction)).monospacedDigit().frame(width: 44, alignment: .trailing) }
