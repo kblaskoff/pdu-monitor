@@ -20,7 +20,12 @@ final class FakeAgent: @unchecked Sendable {
 
     init(read: String = "public", write: String = "private") throws {
         readCommunity = read; writeCommunity = write
-        fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), 0)
+        #if os(Linux)
+        let datagram = Int32(SOCK_DGRAM.rawValue)
+#else
+        let datagram = SOCK_DGRAM
+#endif
+        fd = socket(AF_INET, datagram, 0)
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_addr.s_addr = inet_addr("127.0.0.1")

@@ -32,6 +32,10 @@ jobs:
         run: bash scripts/import-certificate.sh
       - name: Toolchain
         run: swift --version
+      - name: Compile everything
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee build.log | grep -E 'error|Build complete' | tail -n 80
       - name: Test
         run: |
           set -o pipefail
