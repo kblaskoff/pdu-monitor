@@ -13,7 +13,7 @@ switching servers **On / Off / Restart** with a confirmation pop-up. It replaces
 
 ## Install
 
-Every build is on the **Actions** tab (artifact `PDUMonitor`); tagged versions (`v0.1.0`) are published under **Releases**.
+Every build is on the **Actions** tab of the repository (artifact `PDUMonitor`, the zip with the Universal app).
 Unzip, move `PDUMonitor.app` to Applications. Until the builds are signed with a Developer ID certificate and notarized,
 macOS blocks the first start: right-click the app → **Open** (or `xattr -dr com.apple.quarantine /Applications/PDUMonitor.app`).
 macOS 14 or newer, Apple Silicon and Intel.
