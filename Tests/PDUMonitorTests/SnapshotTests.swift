@@ -38,7 +38,7 @@ final class SnapshotTests: XCTestCase {
         let model = AppModel()
         model.settings.demoMode = true
         await model.poll()
-        let size = CGSize(width: 1240, height: 820)
+        let size = CGSize(width: 1000, height: 640)
         for dark in [false, true] {
             model.route = .overview
             model.settings.overviewAsList = false

@@ -89,21 +89,21 @@ struct RackView: View {
                     if let label = model.label(of: server, rack: rackID) { Text(label).font(.caption).foregroundStyle(.secondary) }
                 }
                 .contextMenu { Button("Rename…") { renaming = server } }
-            }.width(min: 90, ideal: 120, max: 150)
+            }.width(min: 80, ideal: 110, max: 140)
             TableColumn("Type") { server in
                 Text(server.kind.displayName).foregroundStyle(server.kind == .network ? Color.yellow : Color.green)
             }.width(min: 70, ideal: 70, max: 70)
             TableColumn("Ports") { server in
                 Text(server.ports.map { "\($0.pduName) #\($0.target.outlet)" }.joined(separator: " · ")).foregroundStyle(.secondary)
-            }.width(min: 120, ideal: 170, max: 230)
+            }.width(min: 110, ideal: 150, max: 210)
             TableColumn("State") { server in
                 HStack(spacing: 5) {
                     PowerDot(isOn: server.power.dotValue)
                     if server.power == .mixed { Text("partly").font(.caption).foregroundStyle(.orange) }
                 }
-            }.width(min: 90, ideal: 90, max: 90)
-            TableColumn("Power (W)") { server in Text(Fmt.watts(server.watts)).monospacedDigit().foregroundStyle(server.watts == 0 ? Color.secondary : Color.primary) }.width(min: 80, ideal: 80, max: 80)
-            TableColumn("Current (A)") { server in Text(Fmt.amps2(server.amps)).monospacedDigit().foregroundStyle(server.amps == 0 ? Color.secondary : Color.primary) }.width(min: 90, ideal: 90, max: 90)
+            }.width(min: 80, ideal: 80, max: 80)
+            TableColumn("Power (W)") { server in Text(Fmt.watts(server.watts)).monospacedDigit().foregroundStyle(server.watts == 0 ? Color.secondary : Color.primary) }.width(min: 76, ideal: 76, max: 76)
+            TableColumn("Current (A)") { server in Text(Fmt.amps2(server.amps)).monospacedDigit().foregroundStyle(server.amps == 0 ? Color.secondary : Color.primary) }.width(min: 84, ideal: 84, max: 84)
             TableColumn("") { _ in EmptyView() }
         }
         .overlay {
