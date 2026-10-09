@@ -58,7 +58,7 @@ struct PDUView: View {
             TableColumn("Server") { outlet in
                 Text(outlet.isAssigned ? outlet.name : "—").foregroundStyle(outlet.isAssigned ? Color.primary : Color.secondary)
                     .font(outlet.isAssigned ? .body.weight(.semibold) : .body)
-            }.width(min: 90, ideal: 130)
+            }.width(min: 90, ideal: 130, max: 180)
             TableColumn("Bank") { outlet in Text(outlet.bank.map(String.init) ?? "—").foregroundStyle(.secondary) }.width(44)
             TableColumn("State") { outlet in PowerDot(isOn: outlet.isOn) }.width(70)
             TableColumn("Current (A)") { outlet in
@@ -67,6 +67,7 @@ struct PDUView: View {
             TableColumn("Power (W)") { outlet in
                 Text(Fmt.watts(outlet.watts)).monospacedDigit().foregroundStyle(outlet.watts == nil || outlet.watts == 0 ? Color.secondary : Color.primary)
             }.width(86)
+            TableColumn("") { _ in EmptyView() }
         }
         .opacity(dimmed ? 0.55 : 1)
         .frame(minHeight: 240, maxHeight: .infinity)

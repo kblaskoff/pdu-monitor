@@ -89,13 +89,13 @@ struct RackView: View {
                     if let label = model.label(of: server, rack: rackID) { Text(label).font(.caption).foregroundStyle(.secondary) }
                 }
                 .contextMenu { Button("Rename…") { renaming = server } }
-            }
+            }.width(min: 90, ideal: 120, max: 170)
             TableColumn("Type") { server in
                 Text(server.kind.displayName).foregroundStyle(server.kind == .network ? Color.yellow : Color.green)
             }.width(70)
             TableColumn("Ports") { server in
                 Text(server.ports.map { "\($0.pduName) #\($0.target.outlet)" }.joined(separator: " · ")).foregroundStyle(.secondary)
-            }.width(min: 120, ideal: 190)
+            }.width(min: 120, ideal: 190, max: 270)
             TableColumn("State") { server in
                 HStack(spacing: 5) {
                     PowerDot(isOn: server.power.dotValue)
@@ -104,6 +104,7 @@ struct RackView: View {
             }.width(90)
             TableColumn("Power (W)") { server in Text(Fmt.watts(server.watts)).monospacedDigit().foregroundStyle(server.watts == 0 ? Color.secondary : Color.primary) }.width(80)
             TableColumn("Current (A)") { server in Text(Fmt.amps2(server.amps)).monospacedDigit().foregroundStyle(server.amps == 0 ? Color.secondary : Color.primary) }.width(90)
+            TableColumn("") { _ in EmptyView() }
         }
         .overlay {
             if servers.isEmpty {
