@@ -47,17 +47,17 @@ public struct DeviceConfig: Codable, Identifiable, Equatable, Sendable {
 
 /// What the person typed for servers: a nicer name for an outlet id such as "200U31".
 public struct ServerLabels: Codable, Equatable, Sendable {
-    /// rackID -> (server key -> label)
-    public var labels: [UUID: [String: String]] = [:]
+    /// rack id (uuid string) -> (server key -> label). Plain string keys keep the JSON file readable.
+    public var labels: [String: [String: String]] = [:]
     public init() {}
     public func label(rack: UUID, id: String) -> String? {
-        let value = labels[rack]?[ServerID.key(id)]
+        let value = labels[rack.uuidString]?[ServerID.key(id)]
         return (value?.isEmpty == false) ? value : nil
     }
     public mutating func set(_ label: String, rack: UUID, id: String) {
-        var rackLabels = labels[rack] ?? [:]
+        var rackLabels = labels[rack.uuidString] ?? [:]
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { rackLabels.removeValue(forKey: ServerID.key(id)) } else { rackLabels[ServerID.key(id)] = trimmed }
-        labels[rack] = rackLabels
+        labels[rack.uuidString] = rackLabels
     }
 }

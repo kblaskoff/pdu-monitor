@@ -1,0 +1,53 @@
+name: build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # The core (SNMP, drivers, rack arithmetic, restart sequence) is plain Swift and is tested on Linux: cheap and fast.
+  core-linux:
+    runs-on: ubuntu-latest
+    container: swift:6.0-noble
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test 2>&1 | tail -n 60
+  app:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      UPDATE_FEED_URL: ${{ vars.UPDATE_FEED_URL }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import the signing certificate (skipped without the Secrets)
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: bash scripts/import-certificate.sh
+      - name: Toolchain
+        run: swift --version
+      - name: Test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log | grep -E 'error:|Executed [0-9]+ tests, with|Test Case .* failed|Fatal error' | tail -n 60
+      - name: Build the application (Apple Silicon and Intel)
+        run: bash scripts/build-app.sh
+      - name: Smoke test the packaged application
+        run: |
+          "build/PDUMonitor.app/Contents/MacOS/PDUMonitor" > build/smoke.log 2>&1 &
+          app_pid=$!
+          sleep 6
+          if ! kill -0 "$app_pid" 2>/dev/null; then cat build/smoke.log; exit 1; fi
+          kill "$app_pid"
+      - name: Upload the application
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDUMonitor
+          path: build/PDUMonitor-*.zip
+          if-no-files-found: error
