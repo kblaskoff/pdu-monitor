@@ -16,6 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swift test 2>&1 | tail -n 60
+  # The host agent runs on AlmaLinux 9 with Python 3.9: it is tested with that version and with a new one.
+  hostagent:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s hostagent/tests -v 2>&1 | tail -n 40
+      - run: bash -n hostagent/install.sh
   app:
     runs-on: macos-15
     timeout-minutes: 30

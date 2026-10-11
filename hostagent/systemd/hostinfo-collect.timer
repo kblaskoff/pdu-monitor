@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample the load of this host every minute (hostinfo)
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

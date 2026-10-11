@@ -1,0 +1,30 @@
+[Unit]
+Description=Sample the load of this host and its VMs (hostinfo)
+Documentation=file:///usr/share/doc/hostinfo/README.md
+
+[Service]
+Type=oneshot
+User=hostinfo
+Group=hostinfo
+ExecStart=/usr/local/sbin/hostinfo collect
+UMask=0027
+# as light as possible for the machine it watches
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=20%
+MemoryMax=128M
+TimeoutStartSec=60
+# no way out of what it needs: it reads /proc, asks zpool/zfs, writes one directory
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hostinfo
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
