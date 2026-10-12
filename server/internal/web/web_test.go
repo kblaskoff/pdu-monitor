@@ -202,6 +202,12 @@ func TestSecurityHeadersAndTheStaticPage(t *testing.T) {
 	if resp, _ := e.anonymous().raw("GET", "/static/../../go.mod", nil, nil); resp.StatusCode == 200 {
 		t.Error("no way out of the static folder")
 	}
+	for path, kind := range map[string]string{"/static/app.js": "javascript", "/static/style.css": "css"} {
+		resp, body := e.anonymous().raw("GET", path, nil, nil)
+		if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("Content-Type"), kind) || len(body) < 100 {
+			t.Errorf("%s: %d %q", path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
 }
 
 func TestLoginCookieAndLogout(t *testing.T) {

@@ -119,6 +119,11 @@ func (s *Server) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/static/") { // the files live under /static/ in the page, but at the root of the embedded tree
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = strings.TrimPrefix(r.URL.Path, "/static")
+			r = r2
+		}
 		files.ServeHTTP(w, r)
 	}))
 	return s.secure(mux)

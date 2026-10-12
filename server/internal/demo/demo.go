@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	"hash/fnv"
 	"math"
 	"sync"
@@ -158,12 +159,13 @@ func vmsOf(host string) (cores int, vms []demoVM, heavy bool) {
 	cores = []int{256, 128, 64}[int(r.next()*3)%3]
 	n := 8 + int(r.next()*8)
 	heavy = host == "a50sf" || host == "a53sf"
+	off := int(r.next() * float64(len(vmNames))) // n is below len(vmNames), so the names of one host never repeat
 	for i := 0; i < n; i++ {
 		base := math.Pow(r.next(), 2) * float64(cores) * 0.05
 		if heavy {
 			base *= 3
 		}
-		vms = append(vms, demoVM{name: vmNames[(i*5+int(r.next()*3))%len(vmNames)] + fmt.Sprintf("%d", i%3), base: base, rss: int64((4 + r.next()*60) * (1 << 30))})
+		vms = append(vms, demoVM{name: vmNames[(i+off)%len(vmNames)] + fmt.Sprintf("%d", (i+off)%3), base: base, rss: int64((1 + r.next()*11) * (1 << 30))})
 	}
 	return
 }
@@ -245,4 +247,12 @@ func (r runner) Run(_ context.Context, h store.Host, command string) ([]byte, er
 		return json.Marshal(t)
 	}
 	return []byte(`{"error":"command not allowed"}`), nil
+}
+
+// Keys is the host key fetcher of the demo: every host "offers" the same fixed key.
+type Keys struct{}
+
+func (Keys) FetchHostKey(_ context.Context, _ string, _ int) (ssh.PublicKey, error) {
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKNsWZl/ElZdOxUt0S5fwUmy2"))
+	return key, err
 }
