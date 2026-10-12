@@ -37,6 +37,8 @@ var migrations = []string{
 	 CREATE INDEX audit_ts ON audit(ts);
 	 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 	 CREATE TABLE pdu_samples (pdu_id INTEGER NOT NULL REFERENCES pdus(id) ON DELETE CASCADE, ts INTEGER NOT NULL, amps REAL, watts REAL, PRIMARY KEY (pdu_id, ts));`,
+	// 2: hosts can be read by a collector (a separate process that pushes the readings) instead of by this server
+	`ALTER TABLE hosts ADD COLUMN collector TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open opens (and creates) the database file. secrets may be nil only in tests that never store communities.
@@ -319,14 +321,16 @@ type Host struct {
 	// HostKey is the public key of the host that was confirmed by an administrator ("" until then).
 	HostKey string `json:"hostKey"`
 	Enabled bool   `json:"enabled"`
+	// Collector is the name of the collector that reads this host and pushes the readings ("" = this server reads it over SSH).
+	Collector string `json:"collector"`
 }
 
-const hostColumns = `id, name, address, ssh_port, ssh_user, rack_id, outlet_key, host_key, enabled`
+const hostColumns = `id, name, address, ssh_port, ssh_user, rack_id, outlet_key, host_key, enabled, collector`
 
 func scanHost(sc interface{ Scan(...any) error }) (Host, error) {
 	var h Host
 	var rack sql.NullInt64
-	if err := sc.Scan(&h.ID, &h.Name, &h.Address, &h.Port, &h.User, &rack, &h.OutletKey, &h.HostKey, &h.Enabled); err != nil {
+	if err := sc.Scan(&h.ID, &h.Name, &h.Address, &h.Port, &h.User, &rack, &h.OutletKey, &h.HostKey, &h.Enabled, &h.Collector); err != nil {
 		return h, err
 	}
 	if rack.Valid {
@@ -360,35 +364,45 @@ func (s *Store) Host(ctx context.Context, id int64) (Host, error) {
 	return h, err
 }
 
-// SaveHost inserts (ID 0) or updates a host. The trusted key is only changed through TrustHostKey.
+// SaveHost inserts (ID 0) or updates a host. The trusted key is only changed through TrustHostKey. A host read by a collector needs
+// no address: the collector knows how to reach it.
 func (s *Store) SaveHost(ctx context.Context, h Host) (Host, error) {
 	h.Name, h.Address, h.User = strings.TrimSpace(h.Name), strings.TrimSpace(h.Address), strings.TrimSpace(h.User)
 	if err := validName(h.Name); err != nil {
 		return h, err
 	}
-	if h.Address == "" || len(h.Address) > 255 || strings.ContainsAny(h.Address, " \t\r\n/@") {
-		return h, errors.New("enter the address of the host")
-	}
-	if h.Port <= 0 || h.Port > 65535 {
-		return h, errors.New("the port must be between 1 and 65535")
-	}
-	if h.User == "" {
-		h.User = "hostinfo-ro"
-	}
-	if strings.ContainsAny(h.User, " \t\r\n/@:") {
-		return h, errors.New("bad user name")
+	if h.Collector == "" {
+		if h.Address == "" || len(h.Address) > 255 || strings.ContainsAny(h.Address, " \t\r\n/@") {
+			return h, errors.New("enter the address of the host")
+		}
+		if h.Port <= 0 || h.Port > 65535 {
+			return h, errors.New("the port must be between 1 and 65535")
+		}
+		if h.User == "" {
+			h.User = "hostinfo-ro"
+		}
+		if strings.ContainsAny(h.User, " \t\r\n/@:") {
+			return h, errors.New("bad user name")
+		}
+	} else {
+		if h.Port == 0 {
+			h.Port = 22
+		}
+		if h.User == "" {
+			h.User = "hostinfo-ro"
+		}
 	}
 	h.OutletKey = strings.TrimSpace(h.OutletKey)
 	if h.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `INSERT INTO hosts (name, address, ssh_port, ssh_user, rack_id, outlet_key, enabled) VALUES (?,?,?,?,?,?,?)`,
-			h.Name, h.Address, h.Port, h.User, h.RackID, h.OutletKey, h.Enabled)
+		res, err := s.db.ExecContext(ctx, `INSERT INTO hosts (name, address, ssh_port, ssh_user, rack_id, outlet_key, enabled, collector) VALUES (?,?,?,?,?,?,?,?)`,
+			h.Name, h.Address, h.Port, h.User, h.RackID, h.OutletKey, h.Enabled, h.Collector)
 		if err != nil {
 			return h, friendly(err)
 		}
 		h.ID, _ = res.LastInsertId()
 		return s.Host(ctx, h.ID)
 	}
-	// a changed address or port needs the key to be confirmed again
+	// a changed address or port needs the key to be confirmed again; who reads the host is not changed here
 	old, err := s.Host(ctx, h.ID)
 	if err != nil {
 		return h, err
@@ -402,6 +416,32 @@ func (s *Store) SaveHost(ctx context.Context, h Host) (Host, error) {
 		return h, friendly(err)
 	}
 	return s.Host(ctx, h.ID)
+}
+
+// ErrOtherCollector: the host exists and is read by this server or by another collector.
+var ErrOtherCollector = errors.New("this host is defined on the server or belongs to another collector")
+
+// CollectedHost returns the host of this name that the collector reports, and creates it the first time (without a rack: an
+// administrator links it to a rack and a power outlet name afterwards). The second result says whether it was created.
+func (s *Store) CollectedHost(ctx context.Context, collector, name string) (Host, bool, error) {
+	name = strings.TrimSpace(name)
+	if err := validName(name); err != nil {
+		return Host{}, false, err
+	}
+	hosts, err := s.Hosts(ctx)
+	if err != nil {
+		return Host{}, false, err
+	}
+	for _, h := range hosts {
+		if h.Name == name {
+			if h.Collector != collector {
+				return h, false, ErrOtherCollector
+			}
+			return h, false, nil
+		}
+	}
+	h, err := s.SaveHost(ctx, Host{Name: name, Collector: collector, Enabled: true})
+	return h, err == nil, err
 }
 
 // TrustHostKey stores the key an administrator has confirmed (authorized_keys format, e.g. "ssh-ed25519 AAAA...").
