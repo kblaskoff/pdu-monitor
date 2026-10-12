@@ -1,0 +1,33 @@
+[Unit]
+Description=PDU Monitor (web interface for PDUs and hypervisors)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pdumonitor
+Group=pdumonitor
+ExecStart=/usr/local/bin/pdumonitord serve -config /etc/pdu-monitor/config.yaml
+Restart=on-failure
+RestartSec=5
+# Binds to a port above 1024 by default; 443 needs the next line.
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+StateDirectory=pdu-monitor
+ConfigurationDirectory=pdu-monitor
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/pdu-monitor
+
+[Install]
+WantedBy=multi-user.target

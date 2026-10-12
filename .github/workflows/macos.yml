@@ -29,6 +29,36 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s hostagent/tests -v 2>&1 | tail -n 40
       - run: bash -n hostagent/install.sh
+  # The server (Go) runs on Ubuntu 22.04: it is tested here and the static binary is the artifact to install.
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Format and vet
+        working-directory: server
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+      - name: Tests (with the race detector)
+        working-directory: server
+        run: go test -race ./... 2>&1 | tail -n 40
+      - name: Build the binary
+        working-directory: server
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::8}" -o dist/pdumonitord ./cmd/pdumonitord
+          cp -r deploy dist/deploy
+          mkdir -p dist/hostagent
+          cp -r ../hostagent/install.sh ../hostagent/hostinfo.py ../hostagent/systemd ../hostagent/README.md ../hostagent/FORMAT.md dist/hostagent/
+          ./dist/pdumonitord version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdu-monitor-server
+          path: server/dist
   app:
     runs-on: macos-15
     timeout-minutes: 30
