@@ -7,9 +7,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -48,6 +51,7 @@ const usage = `pdumonitord - PDU Monitor server
   pdumonitord init [-config /etc/pdu-monitor/config.yaml]    write an example configuration file
   pdumonitord ldap-test -config FILE -user NAME              try a login against the directory and show every step
   pdumonitord pubkey -config FILE                            the public key of this server (for install.sh --key of the host agent)
+  pdumonitord collector-token -name NAME                     make the token of a collector (for pdu-collector) and the lines for this configuration
   pdumonitord hash-password                                  make the hash for local_admin.password_hash
   pdumonitord selfsigned -host NAME -out DIR                 make a self-signed certificate (for a first start or a lab)
   pdumonitord version
@@ -68,6 +72,8 @@ func main() {
 		err = ldapTest(os.Args[2:])
 	case "pubkey":
 		err = pubkey(os.Args[2:])
+	case "collector-token":
+		err = collectorToken(os.Args[2:])
 	case "hash-password":
 		err = hashPassword()
 	case "selfsigned":
@@ -197,6 +203,12 @@ func serve(args []string) error {
 	srv.Keys = keys
 	srv.ServerKey = hostinfo.PublicKeyLine(signer)
 	srv.Secure = cfg.TLSCert != ""
+	for _, c := range cfg.Collectors {
+		hash, _ := hex.DecodeString(c.TokenHash) // checked when the file was read
+		ca := web.CollectorAuth{Name: c.Name}
+		copy(ca.Hash[:], hash)
+		srv.Collectors = append(srv.Collectors, ca)
+	}
 	srv.Demo = *demoMode
 	srv.Version = version
 	srv.Log = func(s string) { logger.Print(s) }
@@ -347,6 +359,25 @@ func pubkey(args []string) error {
 		return err
 	}
 	fmt.Println(hostinfo.PublicKeyLine(signer))
+	return nil
+}
+
+// collectorToken makes a random token. The collector keeps the token (in a file only it can read); this server keeps only its SHA-256.
+func collectorToken(args []string) error {
+	fs := flag.NewFlagSet("collector-token", flag.ExitOnError)
+	name := fs.String("name", "", "name of the collector, e.g. collector-a")
+	_ = fs.Parse(args)
+	if *name == "" || strings.ContainsAny(*name, " \t") {
+		return errors.New("give the name of the collector: -name collector-a")
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	sum := sha256.Sum256([]byte(token))
+	fmt.Printf("Token (put it in the token file of the collector, mode 600; it is not kept here and cannot be shown again):\n\n  %s\n\n", token)
+	fmt.Printf("Add this to the configuration of this server and restart it:\n\ncollectors:\n  - name: %s\n    token_sha256: \"%s\"\n", *name, hex.EncodeToString(sum[:]))
 	return nil
 }
 

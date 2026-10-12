@@ -54,7 +54,9 @@ jobs:
           cp -r deploy dist/deploy
           mkdir -p dist/hostagent
           cp -r ../hostagent/install.sh ../hostagent/hostinfo.py ../hostagent/systemd ../hostagent/README.md ../hostagent/FORMAT.md dist/hostagent/
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA::8}" -o dist/pdu-collector ./cmd/pdu-collector
           ./dist/pdumonitord version
+          ./dist/pdu-collector version
       - uses: actions/upload-artifact@v4
         with:
           name: pdu-monitor-server

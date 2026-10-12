@@ -74,6 +74,9 @@ func (p *Poller) PollAll(ctx context.Context) {
 			p.set(h, nil, "disabled")
 			continue
 		}
+		if h.Collector != "" { // a collector reads this one and pushes the readings (Ingest)
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(h store.Host) {
@@ -121,6 +124,24 @@ func (p *Poller) set(h store.Host, s *Status, errText string) {
 		st.Fetched = old.Fetched
 	}
 	p.states[h.ID] = st
+}
+
+// Ingest stores a reading that a collector pushed. A nil status with an error keeps the last good reading visible, like a failed poll.
+func (p *Poller) Ingest(h store.Host, s *Status, errText string) { p.set(h, s, errText) }
+
+// IngestTop stores the busiest VMs of a window that a collector pushed.
+func (p *Poller) IngestTop(h store.Host, window string, t *Top) {
+	p.mu.Lock()
+	p.tops[topKey{h.ID, window}] = topEntry{t, p.Now()}
+	p.mu.Unlock()
+}
+
+// CachedTop is the last busiest-VMs answer for a host that is read by a collector, and when it arrived.
+func (p *Poller) CachedTop(h store.Host, window string) (*Top, time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.tops[topKey{h.ID, window}]
+	return e.top, e.fetched, ok
 }
 
 // States are the last answers, by host name.

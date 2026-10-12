@@ -60,6 +60,7 @@ type env struct {
 	st   *store.Store
 	auth *fakeAuth
 	keys fakeKeys
+	lab  *demo.Lab
 }
 
 func newEnv(t *testing.T) *env {
@@ -97,7 +98,7 @@ func newEnv(t *testing.T) *env {
 	srv.Demo = true
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &env{t: t, srv: srv, ts: ts, app: a, st: st, auth: fa, keys: keys}
+	return &env{t: t, srv: srv, ts: ts, app: a, st: st, auth: fa, keys: keys, lab: lab}
 }
 
 type client struct {

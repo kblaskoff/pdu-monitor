@@ -59,3 +59,25 @@ func TestMistakesAreErrorsNotSilentDefaults(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+const goodHash = "7be78af209b4ef4e54e3a3709a4224b361dc2ea5b63115d97b8496e0688bee38"
+
+func TestCollectors(t *testing.T) {
+	c, err := Load(write(t, "allow_plain_http: true\ncollectors:\n  - name: collector-a\n    token_sha256: \""+strings.ToUpper(goodHash)+"\"\n  - name: collector-b\n    token_sha256: "+goodHash+"\n"))
+	if err != nil || len(c.Collectors) != 2 || c.Collectors[0].TokenHash != goodHash {
+		t.Fatalf("%+v %v", c, err)
+	}
+	bad := map[string]string{
+		"no name":      "collectors:\n  - token_sha256: " + goodHash + "\n",
+		"space":        "collectors:\n  - name: a b\n    token_sha256: " + goodHash + "\n",
+		"twice":        "collectors:\n  - name: a\n    token_sha256: " + goodHash + "\n  - name: a\n    token_sha256: " + goodHash + "\n",
+		"short hash":   "collectors:\n  - name: a\n    token_sha256: abcd\n",
+		"not hex":      "collectors:\n  - name: a\n    token_sha256: " + strings.Repeat("z", 64) + "\n",
+		"token itself": "collectors:\n  - name: a\n    token: abc\n",
+	}
+	for name, text := range bad {
+		if _, err := Load(write(t, "allow_plain_http: true\n"+text)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

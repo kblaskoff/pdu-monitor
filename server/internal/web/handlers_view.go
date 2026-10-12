@@ -94,6 +94,7 @@ type hostBrief struct {
 	OutletKey  string          `json:"outletKey"`
 	Enabled    bool            `json:"enabled"`
 	Trusted    bool            `json:"trusted"`
+	Collector  string          `json:"collector,omitempty"`
 	Online     bool            `json:"online"`
 	Stale      bool            `json:"stale"`
 	AgeSeconds *int64          `json:"ageSeconds"`
@@ -148,7 +149,7 @@ func (s *Server) hostBriefs(ctx context.Context, d *pduData, full bool) ([]hostB
 	}
 	out := make([]hostBrief, 0, len(hosts))
 	for _, h := range hosts {
-		b := hostBrief{ID: h.ID, Name: h.Name, Address: h.Address, Port: h.Port, RackID: h.RackID, OutletKey: h.OutletKey, Enabled: h.Enabled, Trusted: h.HostKey != ""}
+		b := hostBrief{ID: h.ID, Name: h.Name, Address: h.Address, Port: h.Port, RackID: h.RackID, OutletKey: h.OutletKey, Enabled: h.Enabled, Trusted: h.HostKey != "" || h.Collector != "", Collector: h.Collector}
 		if h.RackID != nil {
 			b.RackName = rackNames[*h.RackID]
 		}
@@ -156,10 +157,12 @@ func (s *Server) hostBriefs(ctx context.Context, d *pduData, full bool) ([]hostB
 		switch {
 		case !h.Enabled:
 			b.Error = "disabled"
-		case h.HostKey == "":
+		case h.HostKey == "" && h.Collector == "":
 			b.Error = "the key of this host is not confirmed yet"
 		case ok:
 			b.Error = hs.Error
+		case h.Collector != "":
+			b.Error = "waiting for the collector " + h.Collector
 		default:
 			b.Error = "not read yet"
 		}
@@ -521,12 +524,21 @@ func (s *Server) handleTop(w http.ResponseWriter, r *http.Request, _ *auth.Sessi
 		writeError(w, 400, "the period must be 1h, 6h, 24h or 7d")
 		return
 	}
-	if !h.Enabled || h.HostKey == "" {
+	if !h.Enabled || (h.HostKey == "" && h.Collector == "") {
 		writeError(w, 409, "this host is not being read (disabled, or its key is not confirmed)")
 		return
 	}
 	if s.App.Hosts == nil {
 		writeError(w, 503, "hosts are not available")
+		return
+	}
+	if h.Collector != "" { // the collector pushes these every few minutes; nobody asks the host from here
+		top, _, ok := s.App.Hosts.CachedTop(h, window)
+		if !ok {
+			writeError(w, 409, "the collector "+h.Collector+" has not sent this yet: it does so every few minutes")
+			return
+		}
+		writeJSON(w, 200, top)
 		return
 	}
 	top, err := s.App.Hosts.Top(r.Context(), h, window)

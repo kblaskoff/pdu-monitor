@@ -1,0 +1,31 @@
+[Unit]
+Description=PDU Monitor collector (reads hypervisors, pushes the readings to the server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pdu-collector
+Group=pdu-collector
+ExecStart=/usr/local/bin/pdu-collector run -config /etc/pdu-collector/config.yaml
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+StateDirectory=pdu-collector
+ReadWritePaths=/var/lib/pdu-collector
+
+[Install]
+WantedBy=multi-user.target

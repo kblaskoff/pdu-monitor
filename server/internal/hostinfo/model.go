@@ -105,7 +105,12 @@ func ValidWindow(w string) bool {
 	return false
 }
 
-func clean(s string) string {
+func clean(s string) string { return cleanN(s, 100) }
+
+// CleanText makes a message from outside fit for the screen: no control characters, at most 200 characters.
+func CleanText(s string) string { return cleanN(s, 200) }
+
+func cleanN(s string, max int) string {
 	var b strings.Builder
 	for _, r := range s {
 		if r >= ' ' && r != 0x7f {
@@ -113,8 +118,8 @@ func clean(s string) string {
 		}
 	}
 	out := strings.TrimSpace(b.String())
-	if r := []rune(out); len(r) > 100 {
-		out = string(r[:100])
+	if r := []rune(out); len(r) > max {
+		out = string(r[:max])
 	}
 	return out
 }

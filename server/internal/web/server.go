@@ -44,8 +44,10 @@ type Server struct {
 	Secure  bool
 	Demo    bool
 	Version string
-	Log     func(string)
-	Now     func() time.Time
+	// Collectors may push the readings of hypervisors (POST /api/collector/report) with their token.
+	Collectors []CollectorAuth
+	Log        func(string)
+	Now        func() time.Time
 
 	byIP   *auth.Limiter
 	byUser *auth.Limiter
@@ -53,12 +55,13 @@ type Server struct {
 	FailureDelay time.Duration
 
 	pendingKeys *pendingKeys
+	collected   *collectors
 }
 
 func New(a *app.App, st *store.Store, authn auth.Authenticator, sessions *auth.Sessions) *Server {
 	return &Server{App: a, Store: st, Auth: authn, Sessions: sessions, Now: time.Now, Version: "dev",
 		byIP: auth.NewLimiter(20, 10*time.Minute), byUser: auth.NewLimiter(6, 15*time.Minute), FailureDelay: 400 * time.Millisecond,
-		pendingKeys: newPendingKeys()}
+		pendingKeys: newPendingKeys(), collected: &collectors{seen: map[string]collectorSeen{}}}
 }
 
 func (s *Server) logf(msg string) {
@@ -76,6 +79,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": s.Version})
 	})
+
+	mux.HandleFunc("POST /api/collector/report", s.handleCollectorReport)
 
 	mux.HandleFunc("GET /api/overview", s.api(auth.RoleViewer, s.handleOverview))
 	mux.HandleFunc("GET /api/racks/{id}", s.api(auth.RoleViewer, s.handleRack))

@@ -489,7 +489,7 @@ async function viewHost(id) {
       h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, hostDot(x), h('h1', {}, x.name),
         !x.enabled ? h('span', { class: 'pill unknown' }, 'disabled') : (!x.trusted ? h('span', { class: 'pill warning' }, 'key not confirmed') : (x.online ? h('span', { class: 'pill ok' }, 'online') : h('span', { class: 'pill over' }, x.stale ? 'data is old' : 'no answer'))),
         st && st.bad ? h('span', { class: 'pill over' }, 'ZFS ' + st.bad) : null),
-      h('div', { class: 'muted small' }, `${x.address}:${x.port}` + (x.ageSeconds != null ? ` · data ${ago(x.ageSeconds)} old` : '') + (x.agent ? ` · agent ${x.agent}` : '')),
+      h('div', { class: 'muted small' }, (x.collector ? `via ${x.collector}` : `${x.address}:${x.port}`) + (x.ageSeconds != null ? ` · data ${ago(x.ageSeconds)} old` : '') + (x.agent ? ` · agent ${x.agent}` : '')),
       x.rackName ? h('div', { class: 'small' }, 'Rack ', h('a', { href: '#/rack/' + x.rackId }, x.rackName), x.outletKey ? ' · outlet ' + x.outletKey : '') : null));
     const warn = x.error && x.error !== 'disabled' ? h('div', { class: 'notice' + (x.ageSeconds == null ? ' bad' : '') }, '⚠ ' + x.error + (x.ageSeconds != null ? ' — showing the last data' : '')) : null;
     const problems = x.problems && x.problems.length ? h('div', { class: 'notice' }, 'The agent reports: ' + x.problems.join('; ')) : null;
@@ -661,7 +661,8 @@ function adminPDUs(body, cfg, reload) {
 function adminHosts(body, cfg, reload) {
   const rackName = (id) => (cfg.racks.find((r) => r.id === id) || {}).name || '—';
   const edit = (host) => {
-    const name = h('input', { value: host ? host.name : '', placeholder: 'e.g. a54sf', required: true });
+    const viaCollector = !!(host && host.collector);
+    const name = h('input', { value: host ? host.name : '', placeholder: 'e.g. a54sf', required: true, readonly: viaCollector });
     const address = h('input', { value: host ? host.address : '', placeholder: 'host name or address', required: true });
     const port = h('input', { value: host ? String(host.port) : '22', inputmode: 'numeric', size: 6 });
     const user = h('input', { value: host ? host.user : 'hostinfo-ro', required: true });
@@ -669,7 +670,10 @@ function adminHosts(body, cfg, reload) {
     rack.value = host && host.rackId != null ? host.rackId : '';
     const key = h('input', { value: host ? host.outletKey : '', placeholder: 'e.g. 200U31' });
     const enabled = h('input', { type: 'checkbox', checked: host ? host.enabled : true });
-    const form = h('div', {}, field('Name', name), field('Address', address), field('SSH port', port), field('SSH user', user, 'The read-only account made by the agent installer.'),
+    const form = h('div', {},
+      viaCollector ? h('p', { class: 'note', style: 'margin:0 0 8px' }, `Read by the collector ${host.collector}: its address and SSH key are in the configuration of the collector.`) : null,
+      field('Name', name),
+      viaCollector ? null : [field('Address', address), field('SSH port', port), field('SSH user', user, 'The read-only account made by the agent installer.')],
       field('Rack', rack), field('Power outlet name', key, 'The server name on the PDUs (e.g. 200U31): it joins the host to its power.'), field('Collect', h('span', {}, enabled, ' enabled')));
     formDialog(host ? 'Edit host ' + host.name : 'New host', form, 'Save', () => api(host ? 'PUT' : 'POST', host ? '/api/admin/hosts/' + host.id : '/api/admin/hosts',
       { name: name.value.trim(), address: address.value.trim(), port: parseInt(port.value, 10) || 22, user: user.value.trim(), rackId: rack.value === '' ? null : +rack.value, outletKey: key.value.trim(), enabled: enabled.checked, hostKey: host ? host.hostKey : '' }).then(reload));
@@ -690,12 +694,23 @@ function adminHosts(body, cfg, reload) {
   };
   const remove = async (x) => { if (await confirmDialog('Delete host ' + x.name + '?', h('p', {}, 'The data collected on the server is deleted; the agent on the host stays.'), 'Delete', true)) api('DELETE', '/api/admin/hosts/' + x.id).then(reload).catch((e) => setBanner({ title: 'Not deleted', error: e.message, running: false })); };
   const keyBox = h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h2', {}, 'Server key'),
-    h('p', { class: 'muted small' }, 'Install the agent on each hypervisor with this key; it lets this server read the data and nothing else:'),
+    h('p', { class: 'muted small' }, 'To let this server read a hypervisor itself, install the agent on it with this key (it lets this server read the data and nothing else). A collector has its own key: pdu-collector pubkey.'),
     h('pre', { class: 'key' }, `sudo ./install.sh --key '${cfg.serverKey}'`));
-  body.append(keyBox, h('div', { class: 'actionbar' }, h('button', { class: 'primary', onclick: () => edit(null) }, 'Add host')),
+  const collectors = cfg.collectors || [];
+  const collectorBox = collectors.length ? h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h2', {}, 'Collectors'),
+    h('p', { class: 'muted small' }, 'Passive readers that push the readings of their hypervisors here. A host they report is added by itself: link it to a rack and a power outlet name with Edit.'),
+    h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, ['Collector', 'Last report', 'Hosts', 'Version'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, collectors.map((c) => {
+        const age = c.lastSeen ? Math.round((Date.now() - new Date(c.lastSeen).getTime()) / 1000) : null;
+        const silent = age == null || age > 180;
+        return h('tr', {}, h('td', { class: 'name' }, c.name),
+          h('td', {}, age == null ? h('span', { class: 'c-over' }, 'never') : h('span', { class: silent ? 'c-over' : 'c-ok' }, ago(Math.max(age, 0)) + ' ago')),
+          h('td', { class: 'num' }, c.lastSeen ? c.hosts : '—'), h('td', {}, c.version || '—'));
+      }))))) : null;
+  body.append(keyBox, collectorBox, h('div', { class: 'actionbar' }, h('button', { class: 'primary', onclick: () => edit(null) }, 'Add host')),
     cfg.hosts.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Host', 'Address', 'User', 'Rack', 'Outlet', 'Key'].map((t) => h('th', {}, t)), h('th'))),
-      h('tbody', {}, cfg.hosts.map((x) => h('tr', { class: x.enabled ? '' : 'dim' }, h('td', { class: 'name' }, x.name), h('td', {}, `${x.address}:${x.port}`), h('td', {}, x.user), h('td', {}, rackName(x.rackId)), h('td', {}, x.outletKey || '—'),
-        h('td', {}, x.hostKey ? h('span', { class: 'c-ok' }, 'trusted') : h('button', { class: 'small primary', onclick: () => trust(x) }, 'Check the key'), x.hostKey ? h('button', { class: 'link small', onclick: () => trust(x) }, 'renew') : null),
+      h('tbody', {}, cfg.hosts.map((x) => h('tr', { class: x.enabled ? '' : 'dim' }, h('td', { class: 'name' }, x.name), h('td', {}, x.collector ? '—' : `${x.address}:${x.port}`), h('td', {}, x.collector ? '' : x.user), h('td', {}, rackName(x.rackId)), h('td', {}, x.outletKey || '—'),
+        h('td', {}, x.collector ? h('span', { class: 'muted' }, 'via ' + x.collector) : x.hostKey ? h('span', { class: 'c-ok' }, 'trusted') : h('button', { class: 'small primary', onclick: () => trust(x) }, 'Check the key'), !x.collector && x.hostKey ? h('button', { class: 'link small', onclick: () => trust(x) }, 'renew') : null),
         h('td', { class: 'num' }, h('button', { class: 'small', onclick: () => edit(x) }, 'Edit'), ' ', h('button', { class: 'small danger', onclick: () => remove(x) }, 'Delete'))))))) : h('p', { class: 'muted' }, 'No hosts yet.'));
 }
 

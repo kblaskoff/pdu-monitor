@@ -24,7 +24,7 @@ func (s *Server) handleAdminConfig(w http.ResponseWriter, r *http.Request, _ *au
 	pdus, _ := s.Store.PDUs(ctx)
 	hosts, _ := s.Store.Hosts(ctx)
 	settings, _ := s.Store.Settings(ctx)
-	writeJSON(w, 200, map[string]any{"racks": racks, "pdus": nonNil(pdus), "hosts": nonNil(hosts), "settings": settings, "serverKey": s.ServerKey, "demo": s.Demo})
+	writeJSON(w, 200, map[string]any{"racks": racks, "pdus": nonNil(pdus), "hosts": nonNil(hosts), "settings": settings, "serverKey": s.ServerKey, "demo": s.Demo, "collectors": s.collectorStatus()})
 }
 
 func nonNil[T any](v []T) []T {
@@ -162,6 +162,15 @@ func (s *Server) handleHostSave(w http.ResponseWriter, r *http.Request, sess *au
 			return
 		}
 		h.ID = id
+		old, err := s.Store.Host(r.Context(), id)
+		if err != nil {
+			s.saveError(w, err)
+			return
+		}
+		h.Collector = old.Collector // who reads a host is not changed by editing it
+	} else if h.Collector != "" && !s.knownCollector(h.Collector) {
+		writeError(w, 400, "there is no collector with this name in the configuration")
+		return
 	}
 	if h.Port == 0 {
 		h.Port = 22
@@ -172,7 +181,7 @@ func (s *Server) handleHostSave(w http.ResponseWriter, r *http.Request, sess *au
 		return
 	}
 	_ = s.Store.Audit(r.Context(), sess.User.Name, "host.save", fmt.Sprintf("%s %s@%s:%d", saved.Name, saved.User, saved.Address, saved.Port), true)
-	if s.App.Hosts != nil && saved.HostKey != "" && saved.Enabled {
+	if s.App.Hosts != nil && saved.HostKey != "" && saved.Enabled && saved.Collector == "" {
 		go s.App.Hosts.PollOne(context.Background(), saved)
 	}
 	writeJSON(w, 200, saved)
@@ -197,6 +206,10 @@ func (s *Server) handleHostDelete(w http.ResponseWriter, r *http.Request, sess *
 func (s *Server) handleHostFetchKey(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
 	h, ok := s.findHost(w, r)
 	if !ok {
+		return
+	}
+	if h.Collector != "" {
+		writeError(w, 400, "this host is read by the collector "+h.Collector+": its key is confirmed there (pdu-collector trust)")
 		return
 	}
 	if s.Keys == nil {

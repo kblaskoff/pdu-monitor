@@ -3,6 +3,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -57,8 +59,18 @@ type Config struct {
 		MaxHours    int `yaml:"max_hours"`
 	} `yaml:"session"`
 
+	// Collectors are the processes (pdu-collector) that may push readings of hypervisors. The token itself is never stored here, only
+	// its SHA-256 (make both with: pdumonitord collector-token -name NAME).
+	Collectors []Collector `yaml:"collectors"`
+
 	// Debug writes every SNMP request and every step of the login (never a password) to the log.
 	Debug bool `yaml:"debug"`
+}
+
+// Collector is one allowed collector.
+type Collector struct {
+	Name      string `yaml:"name"`
+	TokenHash string `yaml:"token_sha256"`
 }
 
 // Load reads and checks a file. Unknown keys are an error: a typo must not silently turn a protection off.
@@ -97,6 +109,22 @@ func (c *Config) finish(dir string) error {
 	}
 	if c.Session.MaxHours <= 0 {
 		c.Session.MaxHours = 24
+	}
+	seen := map[string]bool{}
+	for i, col := range c.Collectors {
+		c.Collectors[i].Name = strings.TrimSpace(col.Name)
+		c.Collectors[i].TokenHash = strings.ToLower(strings.TrimSpace(col.TokenHash))
+		col = c.Collectors[i]
+		if col.Name == "" || len(col.Name) > 60 || strings.ContainsAny(col.Name, " \t\r\n") {
+			return fmt.Errorf("collectors[%d]: give the collector a short name without spaces", i)
+		}
+		if seen[col.Name] {
+			return fmt.Errorf("collectors: the name %q is used twice", col.Name)
+		}
+		seen[col.Name] = true
+		if b, err := hex.DecodeString(col.TokenHash); err != nil || len(b) != sha256.Size {
+			return fmt.Errorf("collectors[%d] (%s): token_sha256 must be 64 hex characters (pdumonitord collector-token makes it)", i, col.Name)
+		}
 	}
 	return nil
 }
@@ -154,6 +182,11 @@ ldap:
 # local_admin:
 #   username: emergency
 #   password_hash: "$2a$12$..."
+
+# Collectors push the readings of the hypervisors (pdu-collector). Add one with: pdumonitord collector-token -name collector-a
+# collectors:
+#   - name: collector-a
+#     token_sha256: "..."
 
 session:
   idle_minutes: 480

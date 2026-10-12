@@ -3,11 +3,15 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/pdu"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
@@ -317,5 +321,66 @@ func TestImportOfTheMacApplicationSettingsFile(t *testing.T) {
 	}
 	if _, err := s.ImportMacBackup(ctx, []byte(`not json`)); err == nil {
 		t.Fatal("garbage must be refused")
+	}
+}
+
+// A database made before collectors existed is upgraded and keeps its hosts as hosts that the server reads itself.
+func TestUpgradeFromBeforeCollectors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.sqlite")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE hosts (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, address TEXT NOT NULL, ssh_port INTEGER NOT NULL DEFAULT 22,
+			ssh_user TEXT NOT NULL DEFAULT 'hostinfo-ro', rack_id INTEGER, outlet_key TEXT NOT NULL DEFAULT '', host_key TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1)`,
+		`CREATE TABLE schema_version (version INTEGER NOT NULL)`, `INSERT INTO schema_version VALUES (1)`,
+		`INSERT INTO hosts (name, address, host_key) VALUES ('old1', '10.0.0.1', 'ssh-ed25519 AAAA')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	s, err := store.Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	hosts, err := s.Hosts(context.Background())
+	if err != nil || len(hosts) != 1 || hosts[0].Name != "old1" || hosts[0].Collector != "" || hosts[0].HostKey == "" {
+		t.Fatalf("%+v %v", hosts, err)
+	}
+}
+
+func TestCollectedHosts(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	h, created, err := s.CollectedHost(ctx, "c-a", "x1")
+	if err != nil || !created || h.Collector != "c-a" || !h.Enabled || h.Address != "" {
+		t.Fatalf("%+v %v %v", h, created, err)
+	}
+	again, created, err := s.CollectedHost(ctx, "c-a", "x1")
+	if err != nil || created || again.ID != h.ID {
+		t.Fatalf("%+v %v %v", again, created, err)
+	}
+	if _, _, err := s.CollectedHost(ctx, "c-b", "x1"); !errors.Is(err, store.ErrOtherCollector) {
+		t.Errorf("another collector: %v", err)
+	}
+	direct, _ := s.SaveHost(ctx, store.Host{Name: "d1", Address: "10.0.0.5", Port: 22, Enabled: true})
+	if _, _, err := s.CollectedHost(ctx, "c-a", direct.Name); !errors.Is(err, store.ErrOtherCollector) {
+		t.Errorf("a host that the server reads: %v", err)
+	}
+	if _, _, err := s.CollectedHost(ctx, "c-a", "  "); err == nil {
+		t.Error("an empty name")
+	}
+	// editing a collected host keeps it a collected host, and a direct host still needs an address
+	h.OutletKey = "100U1"
+	if saved, err := s.SaveHost(ctx, h); err != nil || saved.Collector != "c-a" || saved.OutletKey != "100U1" {
+		t.Errorf("%+v %v", saved, err)
+	}
+	if _, err := s.SaveHost(ctx, store.Host{Name: "d2", Port: 22}); err == nil {
+		t.Error("a direct host without an address was saved")
 	}
 }
