@@ -19,11 +19,9 @@ type Agent struct {
 	values      map[string]snmp.Value
 	oids        map[string]snmp.OID
 	requests    []*snmp.Message
-	// MaxVarBinds: a request with more objects is answered with error-status 1 (tooBig), like PDUs with a small packet limit do.
-	MaxVarBinds int
-	// OnSet is called after a SET so that a test can mirror a control object into a status object.
-	OnSet func(a *Agent, oid snmp.OID, v snmp.Value)
-	done  chan struct{}
+	maxVarBinds int
+	onSet       func(a *Agent, oid snmp.OID, v snmp.Value)
+	done        chan struct{}
 }
 
 // New starts an agent; it stops when the test ends.
@@ -34,10 +32,25 @@ func New(t testing.TB) *Agent {
 		t.Fatal(err)
 	}
 	a := &Agent{Read: "public", Write: "private", conn: conn, values: map[string]snmp.Value{}, oids: map[string]snmp.OID{},
-		MaxVarBinds: 1 << 30, done: make(chan struct{})}
+		maxVarBinds: 1 << 30, done: make(chan struct{})}
 	go a.loop()
 	t.Cleanup(func() { conn.Close(); <-a.done })
 	return a
+}
+
+// LimitVarBinds makes the agent answer a request with more objects than n with error-status 1 (tooBig), like PDUs with a small
+// packet limit do.
+func (a *Agent) LimitVarBinds(n int) {
+	a.mu.Lock()
+	a.maxVarBinds = n
+	a.mu.Unlock()
+}
+
+// OnSet registers a function that is called after a SET, so that a test can mirror a control object into a status object.
+func (a *Agent) OnSet(f func(a *Agent, oid snmp.OID, v snmp.Value)) {
+	a.mu.Lock()
+	a.onSet = f
+	a.mu.Unlock()
 }
 
 // Addr is host:port.
@@ -106,7 +119,10 @@ func (a *Agent) respond(req *snmp.Message) *snmp.Message {
 		return nil // silently dropped, like a real agent
 	}
 	ans := &snmp.Message{Community: req.Community, Type: snmp.GetResponse, RequestID: req.RequestID, VarBinds: append([]snmp.VarBind(nil), req.VarBinds...)}
-	if len(req.VarBinds) > a.MaxVarBinds {
+	a.mu.Lock()
+	limit, onSet := a.maxVarBinds, a.onSet
+	a.mu.Unlock()
+	if len(req.VarBinds) > limit {
 		ans.ErrorStatus = 1
 		return ans
 	}
@@ -145,8 +161,8 @@ func (a *Agent) respond(req *snmp.Message) *snmp.Message {
 			a.mu.Lock()
 			a.values[vb.OID.String()] = vb.Value
 			a.mu.Unlock()
-			if a.OnSet != nil {
-				a.OnSet(a, vb.OID, vb.Value)
+			if onSet != nil {
+				onSet(a, vb.OID, vb.Value)
 			}
 		}
 	default:

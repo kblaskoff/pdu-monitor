@@ -176,7 +176,7 @@ func TestGetAvailableDropsMissingObjectsAndKeepsTheRest(t *testing.T) {
 
 func TestGetAvailableSplitsRequestsOfADeviceWithASmallPacketLimit(t *testing.T) {
 	a := snmptest.New(t)
-	a.MaxVarBinds = 3
+	a.LimitVarBinds(3)
 	var oids []snmp.OID
 	for i := 1; i <= 25; i++ {
 		s := fmt.Sprintf("1.3.6.1.4.1.9.%d", i)
@@ -200,7 +200,7 @@ func TestGetAvailableSplitsRequestsOfADeviceWithASmallPacketLimit(t *testing.T) 
 func TestTooBigEvenForOneObjectIsReported(t *testing.T) {
 	a := snmptest.New(t)
 	a.SetInt("1.3.6.1.2.1.1.1.0", 1)
-	a.MaxVarBinds = 0
+	a.LimitVarBinds(0)
 	_, err := snmp.GetAvailable(context.Background(), a.Client(), []snmp.OID{snmp.MustOID("1.3.6.1.2.1.1.1.0")}, 8)
 	if !errors.Is(err, snmp.ErrTooBig) {
 		t.Fatalf("got %v", err)

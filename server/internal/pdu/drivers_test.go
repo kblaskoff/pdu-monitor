@@ -70,11 +70,11 @@ func cyberPowerAgent(t *testing.T) *snmptest.Agent {
 		a.SetUint(fmt.Sprintf("%s.6.2.4.1.6.%d", cps, i), tenths[i-1])
 		a.SetUint(fmt.Sprintf("%s.6.2.4.1.7.%d", cps, i), watts[i-1])
 	}
-	a.OnSet = func(a *snmptest.Agent, o snmp.OID, v snmp.Value) { // control .6.1.5.1.5.<i> mirrors into status .6.1.4.1.5.<i>
+	a.OnSet(func(a *snmptest.Agent, o snmp.OID, v snmp.Value) { // control .6.1.5.1.5.<i> mirrors into status .6.1.4.1.5.<i>
 		if len(o) > 6 && o[len(o)-6] == 6 && o[len(o)-5] == 1 && o[len(o)-4] == 5 && o[len(o)-3] == 1 && o[len(o)-2] == 5 {
 			a.SetInt(fmt.Sprintf("%s.6.1.4.1.5.%d", cps, o[len(o)-1]), v.Int)
 		}
-	}
+	})
 	return a
 }
 
@@ -189,7 +189,7 @@ func apcAgent(t *testing.T) *snmptest.Agent {
 		a.SetInt(fmt.Sprintf("%s.26.9.2.2.1.6.%d", apc, i), bank)
 		a.SetInt(fmt.Sprintf("%s.26.9.2.4.1.5.%d", apc, i), 1)
 	}
-	a.OnSet = func(a *snmptest.Agent, o snmp.OID, v snmp.Value) { // .9.2.4.1.5.<i> mirrors into .9.2.3.1.5.<i>
+	a.OnSet(func(a *snmptest.Agent, o snmp.OID, v snmp.Value) { // .9.2.4.1.5.<i> mirrors into .9.2.3.1.5.<i>
 		if len(o) > 6 && o[len(o)-6] == 9 && o[len(o)-5] == 2 && o[len(o)-4] == 4 && o[len(o)-3] == 1 && o[len(o)-2] == 5 {
 			state := int64(1)
 			if v.Int == 1 {
@@ -197,7 +197,7 @@ func apcAgent(t *testing.T) *snmptest.Agent {
 			}
 			a.SetInt(fmt.Sprintf("%s.26.9.2.3.1.5.%d", apc, o[len(o)-1]), state)
 		}
-	}
+	})
 	return a
 }
 
@@ -279,7 +279,7 @@ func TestAPCLegacyFirmware(t *testing.T) {
 func TestDeviceWithASmallPacketLimitStillWorks(t *testing.T) {
 	// error-status 1 (tooBig) was what a real PDU answered to a request with 16 objects
 	a := cyberPowerAgent(t)
-	a.MaxVarBinds = 3
+	a.LimitVarBinds(3)
 	snap, err := newDriver(t, pdu.CyberPower, a).Poll(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +290,7 @@ func TestDeviceWithASmallPacketLimitStillWorks(t *testing.T) {
 	approx(t, "watts", snap.Outlet[2].Watts, 360)
 	approx(t, "total", snap.TotalWatts, 2150)
 	b := apcAgent(t)
-	b.MaxVarBinds = 1
+	b.LimitVarBinds(1)
 	apcSnap, err := newDriver(t, pdu.APC, b).Poll(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -323,11 +323,11 @@ func TestCyberPowerLegacyEPDU(t *testing.T) {
 			a.SetUint(fmt.Sprintf("%s.3.5.1.1.8.%d", l, i), 276)
 		}
 	}
-	a.OnSet = func(a *snmptest.Agent, o snmp.OID, v snmp.Value) {
+	a.OnSet(func(a *snmptest.Agent, o snmp.OID, v snmp.Value) {
 		if len(o) > 6 && o[len(o)-6] == 3 && o[len(o)-5] == 3 && o[len(o)-4] == 1 && o[len(o)-3] == 1 && o[len(o)-2] == 4 {
 			a.SetInt(fmt.Sprintf("%s.3.5.1.1.4.%d", l, o[len(o)-1]), v.Int)
 		}
-	}
+	})
 	d := newDriver(t, pdu.CyberPower, a)
 	snap, err := d.Poll(context.Background())
 	if err != nil {
