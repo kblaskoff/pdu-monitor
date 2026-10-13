@@ -3,7 +3,9 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -23,6 +25,22 @@ import (
 
 //go:embed static
 var staticFiles embed.FS
+
+// staticTags is the ETag of every embedded file (a hash of its content), made once when the program starts.
+var staticTags = func() map[string]string {
+	tags := map[string]string{}
+	_ = fs.WalkDir(staticFiles, "static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if data, err := staticFiles.ReadFile(path); err == nil {
+			sum := sha256.Sum256(data)
+			tags[strings.TrimPrefix(path, "static/")] = `"` + hex.EncodeToString(sum[:8]) + `"`
+		}
+		return nil
+	})
+	return tags
+}()
 
 // KeyFetcher looks at the SSH key a host offers (the real one is hostinfo.SSHClient).
 type KeyFetcher interface {
@@ -129,6 +147,16 @@ func (s *Server) Handler() http.Handler {
 			r2.URL.Path = strings.TrimPrefix(r.URL.Path, "/static")
 			r = r2
 		}
+		// The files of the page are checked with the server at every load: a 304 with a few bytes when nothing changed, the new file
+		// after an update. Without this a browser keeps the old script and a new server looks unchanged until a forced reload.
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name == "" {
+			name = "index.html"
+		}
+		if tag, ok := staticTags[name]; ok {
+			w.Header().Set("ETag", tag)
+		}
+		w.Header().Set("Cache-Control", "no-cache")
 		files.ServeHTTP(w, r)
 	}))
 	return s.secure(mux)

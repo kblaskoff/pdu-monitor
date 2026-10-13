@@ -203,6 +203,22 @@ func TestSecurityHeadersAndTheStaticPage(t *testing.T) {
 	if resp, _ := e.anonymous().raw("GET", "/static/../../go.mod", nil, nil); resp.StatusCode == 200 {
 		t.Error("no way out of the static folder")
 	}
+	// a page is checked again at every load; when it has not changed only a 304 comes back
+	for _, path := range []string{"/", "/static/app.js", "/static/style.css"} {
+		resp, _ := e.anonymous().raw("GET", path, nil, nil)
+		tag := resp.Header.Get("ETag")
+		if resp.StatusCode != 200 || tag == "" || resp.Header.Get("Cache-Control") != "no-cache" {
+			t.Fatalf("%s: %d etag=%q cache=%q", path, resp.StatusCode, tag, resp.Header.Get("Cache-Control"))
+		}
+		again, body := e.anonymous().raw("GET", path, nil, map[string]string{"If-None-Match": tag})
+		if again.StatusCode != 304 || len(body) != 0 {
+			t.Errorf("%s with the same tag: %d, %d bytes", path, again.StatusCode, len(body))
+		}
+		other, _ := e.anonymous().raw("GET", path, nil, map[string]string{"If-None-Match": `"old"`})
+		if other.StatusCode != 200 {
+			t.Errorf("%s with an old tag: %d", path, other.StatusCode)
+		}
+	}
 	for path, kind := range map[string]string{"/static/app.js": "javascript", "/static/style.css": "css"} {
 		resp, body := e.anonymous().raw("GET", path, nil, nil)
 		if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("Content-Type"), kind) || len(body) < 100 {
