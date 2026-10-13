@@ -23,6 +23,10 @@ function h(tag, props, ...kids) {
   }
   return el;
 }
+// append and replaceChildren write null as the text "null": these leave such children out, as h() does.
+const present = (kids) => kids.flat(Infinity).filter((k) => k != null && k !== false);
+function add(el, ...kids) { el.append(...present(kids)); }
+function put(el, ...kids) { el.replaceChildren(...present(kids)); }
 const svgNS = 'http://www.w3.org/2000/svg';
 function svg(tag, attrs, ...kids) {
   const el = document.createElementNS(svgNS, tag);
@@ -170,11 +174,11 @@ function ensureShell(active) {
     setBanner(S.banner);
   }
   const { nav, who } = S.shell;
-  nav.replaceChildren(
+  put(nav,
     h('a', { href: '#/', class: active === 'overview' ? 'on' : '' }, 'Overview'),
     h('a', { href: '#/hosts', class: active === 'hosts' ? 'on' : '' }, 'Hosts'),
     isAdmin() ? h('a', { href: '#/admin', class: active === 'admin' ? 'on' : '' }, 'Settings') : null);
-  who.replaceChildren(
+  put(who,
     S.session.demo ? h('span', { class: 'demo-pill' }, 'DEMO') : null,
     h('span', {}, `${S.session.user.displayName || S.session.user.name} · ${S.session.user.role}`),
     h('button', { class: 'small', onclick: logout }, 'Log out'));
@@ -651,11 +655,11 @@ function adminPDUs(body, cfg, reload) {
   };
   const remove = async (p) => { if (await confirmDialog('Delete PDU ' + p.name + '?', h('p', {}, 'Its history is deleted too.'), 'Delete', true)) api('DELETE', '/api/admin/pdus/' + p.id).then(reload).catch((e) => setBanner({ title: 'Not deleted', error: e.message, running: false })); };
   const rackName = (id) => (cfg.racks.find((r) => r.id === id) || {}).name || '?';
-  body.append(h('div', { class: 'actionbar' }, h('button', { class: 'primary', disabled: !cfg.racks.length, onclick: () => edit(null) }, 'Add PDU'), !cfg.racks.length ? h('span', { class: 'muted' }, 'Add a rack first.') : null),
+  add(body, h('div', { class: 'actionbar' }, h('button', { class: 'primary', disabled: !cfg.racks.length, onclick: () => edit(null) }, 'Add PDU'), !cfg.racks.length ? h('span', { class: 'muted' }, 'Add a rack first.') : null),
     cfg.pdus.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Rack', 'PDU', 'Make', 'Address', 'Limit', 'Control'].map((t) => h('th', {}, t)), h('th'))),
       h('tbody', {}, cfg.pdus.map((p) => h('tr', {}, h('td', {}, rackName(p.rackId)), h('td', { class: 'name' }, p.name), h('td', {}, p.vendor === 'apc' ? 'APC' : 'CyberPower'), h('td', {}, `${p.host}:${p.port}`),
         h('td', { class: 'num' }, lim(p.maxAmps) + ' A'), h('td', {}, p.hasWriteCommunity ? 'on / off' : h('span', { class: 'muted' }, 'read only')),
-        h('td', { class: 'num' }, h('button', { class: 'small', onclick: () => edit(p) }, 'Edit'), ' ', h('button', { class: 'small danger', onclick: () => remove(p) }, 'Delete'))))))) : null);
+        h('td', { class: 'num' }, h('button', { class: 'small', onclick: () => edit(p) }, 'Edit'), ' ', h('button', { class: 'small danger', onclick: () => remove(p) }, 'Delete'))))))) : h('p', { class: 'muted' }, 'There are no PDUs yet.'));
 }
 
 function adminHosts(body, cfg, reload) {
@@ -707,7 +711,7 @@ function adminHosts(body, cfg, reload) {
           h('td', {}, age == null ? h('span', { class: 'c-over' }, 'never') : h('span', { class: silent ? 'c-over' : 'c-ok' }, ago(Math.max(age, 0)) + ' ago')),
           h('td', { class: 'num' }, c.lastSeen ? c.hosts : '—'), h('td', {}, c.version || '—'));
       }))))) : null;
-  body.append(keyBox, collectorBox, h('div', { class: 'actionbar' }, h('button', { class: 'primary', onclick: () => edit(null) }, 'Add host')),
+  add(body, keyBox, collectorBox, h('div', { class: 'actionbar' }, h('button', { class: 'primary', onclick: () => edit(null) }, 'Add host')),
     cfg.hosts.length ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Host', 'Address', 'User', 'Rack', 'Outlet', 'Key'].map((t) => h('th', {}, t)), h('th'))),
       h('tbody', {}, cfg.hosts.map((x) => h('tr', { class: x.enabled ? '' : 'dim' }, h('td', { class: 'name' }, x.name), h('td', {}, x.collector ? '—' : `${x.address}:${x.port}`), h('td', {}, x.collector ? '' : x.user), h('td', {}, rackName(x.rackId)), h('td', {}, x.outletKey || '—'),
         h('td', {}, x.collector ? h('span', { class: 'muted' }, 'via ' + x.collector) : x.hostKey ? h('span', { class: 'c-ok' }, 'trusted') : h('button', { class: 'small primary', onclick: () => trust(x) }, 'Check the key'), !x.collector && x.hostKey ? h('button', { class: 'link small', onclick: () => trust(x) }, 'renew') : null),
@@ -741,7 +745,7 @@ function adminImport(body, reload) {
     if (!file.files[0]) { out.append(h('p', { class: 'error' }, 'Choose the file first.')); return; }
     try {
       const r = await api('POST', '/api/admin/import', await file.files[0].text());
-      out.append(h('p', { class: 'c-ok' }, `Added ${r.racks} racks, ${r.pdus} PDUs and ${r.labels} names.`),
+      add(out, h('p', { class: 'c-ok' }, `Added ${r.racks} racks, ${r.pdus} PDUs and ${r.labels} names.`),
         r.skipped && r.skipped.length ? h('p', { class: 'muted small' }, 'Already there, not touched: ' + r.skipped.join(', ')) : null,
         r.withoutCommunity && r.withoutCommunity.length ? h('p', { class: 'notice' }, 'These PDUs came without a community: open them under PDUs and enter it: ' + r.withoutCommunity.join(', ')) : null);
     } catch (e) { out.append(h('p', { class: 'error' }, e.message)); }
