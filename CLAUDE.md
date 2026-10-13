@@ -89,8 +89,12 @@ CI: `.github/workflows/macos.yml` (named "build"): jobs `core-linux`, `hostagent
 * Security stance: the web server is internal only, but treat it as hostile: CSRF header + Origin/Sec-Fetch-Site checks, CSP, rate limiting
   of logins and tokens, no secret in the log or the audit, strict parsing of everything that comes from hosts or collectors.
 * **Secrets never go into the repository**: SNMP communities, LDAP bind password, collector tokens, SSH keys, `secret.key`, TLS keys.
-* Git: develop on the branch the session is given (`claude/...`); the owner's flow so far was to push that branch and also update `main`
-  after CI is green. Do not open pull requests unless asked. The GitHub tools are `mcp__github__*` (no `gh` CLI in the cloud sessions).
+* Git: **every session (and every person) works in its own branch** (`claude/...`, the one the session is given); two sessions never
+  push to the same branch. Rule agreed with the owner: **after CI is green on the branch, the work goes into `main`**.
+  Before that, bring `main` into your branch (`git fetch origin main && git merge origin/main`), resolve conflicts, run the tests again, push the
+  branch, wait for green CI, then update `main` (`git push origin <branch>:main`, a fast-forward). If `main` moved meanwhile and the push is
+  rejected, merge `origin/main` again and repeat. **Never force-push** and never rewrite `main`. Do not open pull requests unless asked.
+  The GitHub tools are `mcp__github__*` (no `gh` CLI in the cloud sessions).
 
 ## Not done yet / ideas
 
