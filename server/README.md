@@ -118,7 +118,8 @@ sudo systemctl restart pdu-monitor
 ```
 
 **7. Hypervisors.** The agent is in `/opt/pdu-monitor/hostagent`. Print the key of this server, copy the folder to each hypervisor and
-install it there with that key (see [Hypervisors](#hypervisors) for confirming the host key in the web interface):
+install it there with that key. The full steps (checks, confirming the host key, update, removal) are in
+[../hostagent/README.md](../hostagent/README.md):
 
 ```
 sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml

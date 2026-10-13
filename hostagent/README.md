@@ -16,24 +16,97 @@ a warning), number of running VMs, CPU of every VM, the host's own CPU. It sees 
 
 ## Install (on each hypervisor, as root)
 
+The agent needs Python 3.9 (AlmaLinux / RHEL 9 have it) and nothing else. It is read by `pdumonitord` itself, or by a
+`pdu-collector` where the server cannot reach the hypervisors; the steps are the same, only the key differs. In the examples,
+`SERVER-IP` is the address the server (or the collector) connects from and `HYPERVISOR` is the host.
+
+**1. The key of the server.** On the server:
+
 ```
-./install.sh --key "ssh-ed25519 AAAA… pdu-monitor" --from 10.0.0.5
+sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml
 ```
 
-`--key` is the **public** key of the monitoring system (make a separate one: `ssh-keygen -t ed25519 -f hostinfo_key`). `--from` limits
-where it may log in from. The script creates the two accounts, installs `/usr/local/sbin/hostinfo`, the timer and the key line
+It prints one line, `ssh-ed25519 AAAA… pdu-monitor` (the same as Settings → Hosts in the web interface). For a collector use
+`sudo -u pdu-collector pdu-collector pubkey -config /etc/pdu-collector/config.yaml` instead.
+
+**2. The files.** Copy this folder from the clone on the server:
 
 ```
-restrict,command="/usr/local/sbin/hostinfo serve",from="10.0.0.5" ssh-ed25519 AAAA… pdu-monitor
+scp -r /opt/pdu-monitor/hostagent root@HYPERVISOR:/root/
+```
+
+or clone the repository on the hypervisor (`dnf install git`, `git clone https://github.com/kblaskoff/pdu-monitor.git /opt/pdu-monitor`).
+
+**3. Install.** On the hypervisor, as root:
+
+```
+cd /root/hostagent
+./install.sh --key "ssh-ed25519 AAAA… pdu-monitor" --from SERVER-IP
+```
+
+The script creates the accounts `hostinfo` (collects) and `hostinfo-ro` (what the key logs in as), installs `/usr/local/sbin/hostinfo`,
+`/var/lib/hostinfo` and the timer, writes the key line and ends with a dry run: the number of running VMs, the ZFS pools and any problem.
+`--from` limits where the key may be used from (several addresses: `--from 10.0.0.5,10.0.0.6`). The key line is
+
+```
+restrict,command="/usr/local/sbin/hostinfo serve",from="SERVER-IP" ssh-ed25519 AAAA… pdu-monitor
 ```
 
 so the key cannot open a shell, forward ports or run anything but `hostinfo serve`, which answers exactly: `status`, `top 1h`, `top 6h`,
-`top 24h`, `top 7d`, `version` (nothing else is accepted, and nothing of the command is given to a shell).
+`top 24h`, `top 7d`, `version` (nothing else is accepted, and nothing of the command is given to a shell). There is one key per host:
+`--key` replaces the one that was there.
 
-Check on the host after a minute:  `cat /var/lib/hostinfo/status.json`  and  `systemctl list-timers hostinfo-collect.timer`.
-Check from the monitoring system:  `ssh -i hostinfo_key hostinfo-ro@HOST status`  and  `ssh -i hostinfo_key hostinfo-ro@HOST "top 6h"`.
-A dry run that writes nothing:  `sudo -u hostinfo /usr/local/sbin/hostinfo collect --dry-run`.
-Remove everything:  `./install.sh --uninstall`.
+**4. Check on the hypervisor** after a minute:
+
+```
+cat /var/lib/hostinfo/status.json
+systemctl list-timers hostinfo-collect.timer
+sudo -u hostinfo /usr/local/sbin/hostinfo collect --dry-run      # a sample that writes nothing
+```
+
+**5. Add the host in the web interface.** Settings → Hosts → **Add host**: name, address, SSH user `hostinfo-ro`, and the rack and power
+outlet name (`200U31`) that join it with its power. Press **Check the key**, compare the fingerprint with the one the hypervisor prints:
+
+```
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+and paste it to confirm. Nothing is read before that. A collector does the same with `pdu-collector trust`, and its hosts appear in
+Settings → Hosts by themselves.
+
+**6. Check from the server** (optional; ssh shows the host key and asks before it connects, compare it as in step 5):
+
+```
+sudo -u pdumonitor ssh -i /var/lib/pdu-monitor/ssh_ed25519 -o UserKnownHostsFile=/dev/null hostinfo-ro@HYPERVISOR status
+sudo -u pdumonitor ssh -i /var/lib/pdu-monitor/ssh_ed25519 -o UserKnownHostsFile=/dev/null hostinfo-ro@HYPERVISOR "top 6h"
+```
+
+**Several hypervisors** from the server in one go (each still needs step 5):
+
+```
+KEY="$(sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml)"
+for h in HYPERVISOR1 HYPERVISOR2; do
+  scp -r /opt/pdu-monitor/hostagent root@$h:/root/ && ssh root@$h "cd /root/hostagent && ./install.sh --key '$KEY' --from SERVER-IP"
+done
+```
+
+## Update
+
+Bring the new files to the hypervisor (`git pull` in the clone on the server, then step 2) and run the script **without** `--key`:
+
+```
+cd /root/hostagent && ./install.sh
+/usr/local/sbin/hostinfo version
+```
+
+Without `--key` the key line stays as it is. The collected history in `/var/lib/hostinfo` and changes made with `systemctl edit`
+(for example `User=root`) stay too. Nothing has to be done on the server: it reads the new version at its next poll.
+For all hypervisors from the server: the loop above with `./install.sh` instead of `./install.sh --key …`.
+
+## Remove
+
+`./install.sh --uninstall` removes the program, the timer and both accounts; the collected data is left in `/var/lib/hostinfo`.
+Delete the host in Settings → Hosts as well.
 
 ## If something does not work
 

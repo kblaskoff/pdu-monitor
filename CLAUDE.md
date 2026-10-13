@@ -29,7 +29,7 @@ Three parts in one repository:
   in the code; today only `admin: [admins]` is configured. The directory is an old version: filters, group lookup, StartTLS/LDAPS and `legacy_tls` are
   configurable, and `pdumonitord ldap-test` shows every step. No TOTP (VPN + LDAP is enough). An emergency local admin (bcrypt) is optional.
 * **PDUs are always read by the server** (SNMP v1; communities are encrypted in the database with `secret.key`).
-* **Hypervisors: no SNMP.** The agent (`hostagent/hostinfo.py`) runs as root from a systemd timer, writes plain files; a read-only
+* **Hypervisors: no SNMP.** The agent (`hostagent/hostinfo.py`) runs from a systemd timer as the account `hostinfo` (root only where `/proc` has `hidepid` or `zpool` needs it), writes plain files; a read-only
   user (`hostinfo-ro`) with a forced-command SSH key can only run `status` and `top 1h|6h|24h|7d`. Format: `hostagent/FORMAT.md` (format 1).
   Reading is done either by the server itself over SSH, or by a **collector**.
 * **Host keys are pinned.** A person compares the fingerprint with the one on the host and types it (web UI for the server, `pdu-collector trust`
