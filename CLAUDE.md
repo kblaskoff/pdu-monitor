@@ -15,7 +15,7 @@ Three parts in one repository:
 
 | Part | Where | Language | State |
 |---|---|---|---|
-| **Server** (web UI, API, LDAP login, PDU polling) | `server/` (module `github.com/kblaskoff/pdu-monitor/server`) | Go | the main product; demo mode works; not yet tried against real devices or the real LDAP |
+| **Server** (web UI with its login, API, PDU polling) | `server/` (module `github.com/kblaskoff/pdu-monitor/server`) | Go | the main product; installed on the owner's server from a clone, the LDAP login works against the real directory; not yet tried against real PDUs |
 | **Host agent** (samples a hypervisor once a minute) | `hostagent/` | Python 3.9 stdlib | running on one real hypervisor (AlmaLinux 9) |
 | **Collector** (`pdu-collector`, passive reader of hypervisors) | `server/cmd/pdu-collector`, `server/internal/collector` | Go | tested, not tried on real hosts |
 | Mac app (the first version) | `Sources/`, `Tests/`, `Package.swift` | Swift / SwiftUI | works and was tested by the owner; superseded by the web server, not removed |
@@ -24,8 +24,9 @@ Three parts in one repository:
 
 * **Central Linux server with a web UI** (Ubuntu 22, Go, one binary `pdumonitord`), 5-15 users, internal network and VPN only.
   Chosen over native apps. The Mac app stays for now; the server can import its settings file (Settings -> Import).
-* **Login: LDAP only, and only the group `admins` may enter** (the roles admin / operator / viewer exist in the code; today only
-  `admin: [admins]` is configured). The directory is an old version: filters, group lookup, StartTLS/LDAPS and `legacy_tls` are
+* **Login to the web UI: LDAP only, and only the group `admins` may enter.** LDAP is used for nothing else: the collector, the agents
+  and the PDUs never touch it. The roles admin / operator / viewer exist
+  in the code; today only `admin: [admins]` is configured. The directory is an old version: filters, group lookup, StartTLS/LDAPS and `legacy_tls` are
   configurable, and `pdumonitord ldap-test` shows every step. No TOTP (VPN + LDAP is enough). An emergency local admin (bcrypt) is optional.
 * **PDUs are always read by the server** (SNMP v1; communities are encrypted in the database with `secret.key`).
 * **Hypervisors: no SNMP.** The agent (`hostagent/hostinfo.py`) runs as root from a systemd timer, writes plain files; a read-only
@@ -89,6 +90,7 @@ CI: `.github/workflows/macos.yml` (named "build"): jobs `core-linux`, `hostagent
 * Security stance: the web server is internal only, but treat it as hostile: CSRF header + Origin/Sec-Fetch-Site checks, CSP, rate limiting
   of logins and tokens, no secret in the log or the audit, strict parsing of everything that comes from hosts or collectors.
 * **Secrets never go into the repository**: SNMP communities, LDAP bind password, collector tokens, SSH keys, `secret.key`, TLS keys.
+  The repository is **public**: no real domain, host name or directory DN of the owner either; examples use `replace_me`.
 * Git: **every session (and every person) works in its own branch** (`claude/...`, the one the session is given); two sessions never
   push to the same branch. Rule agreed with the owner: **after CI is green on the branch, the work goes into `main`**.
   Before that, bring `main` into your branch (`git fetch origin main && git merge origin/main`), resolve conflicts, run the tests again, push the

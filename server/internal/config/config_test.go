@@ -22,7 +22,7 @@ func TestTheExampleIsAValidFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != "10.0.0.5:8443" || c.Session.IdleMinutes != 480 || c.LDAP.Roles["admin"][0] != "admins" {
+	if c.Listen != ":8443" || c.Session.IdleMinutes != 480 || c.LDAP.Roles["admin"][0] != "admins" {
 		t.Fatalf("%+v", c)
 	}
 	dir := t.TempDir()
@@ -30,7 +30,7 @@ func TestTheExampleIsAValidFile(t *testing.T) {
 	os.WriteFile(pw, []byte("secret\n"), 0o600)
 	c.LDAP.BindPasswordFile = pw
 	l, err := c.LDAPConfig()
-	if err != nil || l.BindPassword != "secret" || l.Roles[auth.RoleAdmin][0] != "admins" || l.URL != "ldaps://ldap.example.com:636" {
+	if err != nil || l.BindPassword != "secret" || l.Roles[auth.RoleAdmin][0] != "admins" || l.URL != "ldaps://ldap.replace_me:636" {
 		t.Fatalf("%+v %v", l, err)
 	}
 }

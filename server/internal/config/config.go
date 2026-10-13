@@ -154,26 +154,32 @@ func (c *Config) LDAPConfig() (auth.LDAPConfig, error) {
 }
 
 // Example is written by `pdumonitord init`.
-const Example = `# PDU Monitor server. Keep this file readable only by the service user (chmod 640).
+const Example = `# PDU Monitor server. Replace every replace_me with the values of your network.
+# Readable by root and the group pdumonitor only: chown root:pdumonitor, chmod 640.
 
-# The management address of this server and the TLS certificate (from your internal CA).
-listen: "10.0.0.5:8443"
+# ":8443" listens on every address of this server, "10.0.0.5:8443" on one. An IP address is safer than a name here
+# (a name is looked up when the service starts); the name people type only has to be in the DNS and in the certificate.
+listen: ":8443"
+# PEM files: tls_cert is the certificate of the server followed by the intermediate certificates (the full chain),
+# tls_key is its private key without a passphrase. Both: chown root:pdumonitor, chmod 640.
 tls_cert: /etc/pdu-monitor/tls.crt
 tls_key: /etc/pdu-monitor/tls.key
 
 data_dir: /var/lib/pdu-monitor
 
+# The directory is used for one thing only: the login to the web interface.
 ldap:
-  url: "ldaps://ldap.example.com:636"      # or ldap://host:389 with start_tls: true
+  url: "ldaps://ldap.replace_me:636"       # or ldap://host:389 with start_tls: true
   # start_tls: true
-  ca_file: /etc/pdu-monitor/ldap-ca.pem     # the certificate of your internal CA, if the directory uses one
+  # ca_file: /etc/pdu-monitor/ldap-ca.pem   # only if the certificate of the directory is from your own CA; the file must exist
   # legacy_tls: true                        # only if the directory is too old for TLS 1.2
-  bind_dn: "cn=pdu-monitor,ou=services,dc=example,dc=com"   # a service account that may search (leave out for anonymous search)
-  bind_password_file: /etc/pdu-monitor/ldap-bind-password   # one line, chmod 600
-  user_base: "ou=people,dc=example,dc=com"
+  bind_dn: "cn=replace_me,dc=replace_me,dc=replace_me"   # a service account that may search (leave out for anonymous search)
+  bind_password_file: /etc/pdu-monitor/ldap-bind-password # one line; chown root:pdumonitor, chmod 640
+  user_base: "ou=People,dc=replace_me,dc=replace_me"
   user_filter: "(uid={username})"           # Active Directory: (&(objectClass=user)(sAMAccountName={username}))
-  # user_dn_template: "uid={username},ou=people,dc=example,dc=com"   # instead of the search, if the directory does not allow it
-  group_base: "ou=groups,dc=example,dc=com" # groups are found by member / uniqueMember / memberUid; leave out if only memberOf is used
+  # user_dn_template: "uid={username},ou=People,dc=replace_me,dc=replace_me"   # instead of the search, if the directory does not allow it
+  group_base: "ou=group,dc=replace_me,dc=replace_me"   # leave out if only memberOf is used
+  # group_filter: "(memberUid={username})"  # the default also finds groups by member / uniqueMember (the DN of the person)
   # member_of_attr: memberOf                # the attribute of the person that lists the groups (Active Directory, OpenLDAP memberof overlay)
   roles:
     admin: [admins]                         # the cn (or the full DN) of the groups; nobody outside them can log in

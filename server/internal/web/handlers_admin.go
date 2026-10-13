@@ -24,7 +24,7 @@ func (s *Server) handleAdminConfig(w http.ResponseWriter, r *http.Request, _ *au
 	pdus, _ := s.Store.PDUs(ctx)
 	hosts, _ := s.Store.Hosts(ctx)
 	settings, _ := s.Store.Settings(ctx)
-	writeJSON(w, 200, map[string]any{"racks": racks, "pdus": nonNil(pdus), "hosts": nonNil(hosts), "settings": settings, "serverKey": s.ServerKey, "demo": s.Demo, "collectors": s.collectorStatus()})
+	writeJSON(w, 200, map[string]any{"racks": nonNil(racks), "pdus": nonNil(pdus), "hosts": nonNil(hosts), "settings": settings, "serverKey": s.ServerKey, "demo": s.Demo, "collectors": s.collectorStatus()})
 }
 
 func nonNil[T any](v []T) []T {

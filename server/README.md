@@ -26,7 +26,10 @@ Sample racks, PDUs and 15 hypervisors; nothing is sent to any device. Data is ke
 
 ## Install on Ubuntu 22.04
 
-1. Get `pdumonitord-linux-amd64` from the CI artifact `pdu-monitor-server` (job **server**) and unpack it with the `deploy/` folder.
+This is the short version with the program built by CI. To build it on the server from the repository, see
+[Install from the repository](#install-from-the-repository): the same steps in full, with the permissions.
+
+1. Get `pdumonitord` from the CI artifact `pdu-monitor-server` (job **server**) and unpack it with the `deploy/` folder.
 2. `sudo ./install.sh --binary ./pdumonitord`: creates the user `pdumonitor`, `/etc/pdu-monitor`, `/var/lib/pdu-monitor`, the systemd unit
    and an example `config.yaml`. Running it again never overwrites the configuration, the database or the keys.
 3. Edit `/etc/pdu-monitor/config.yaml` (see below), put the TLS certificate in place (from your internal CA, or
@@ -37,10 +40,108 @@ Sample racks, PDUs and 15 hypervisors; nothing is sent to any device. Data is ke
 6. Allow the port only from the VPN and the management network: `sudo ufw allow from 10.0.0.0/8 to any port 8443 proto tcp`
    (adjust), and make sure the server can reach the PDUs (UDP 161) and the hypervisors (TCP 22).
 
+## Install from the repository
+
+Everything is in one place: the server, its `deploy/` folder and the host agent. The web interface is built into the program
+(there are no web files to copy and no Apache or nginx: `pdumonitord` serves HTTPS itself). In the examples, `replace_me` stands
+for your own names.
+
+**1. Go and the repository.** The Go of Ubuntu 22.04 (`apt install golang`) is too old; the snap is current:
+
+```
+sudo snap install go --classic
+sudo apt install git sqlite3
+sudo mkdir /opt/pdu-monitor && sudo chown "$USER" /opt/pdu-monitor
+git clone https://github.com/kblaskoff/pdu-monitor.git /opt/pdu-monitor
+```
+
+The clone belongs to you, not to root: building needs no `sudo` (and git refuses to work in a folder owned by another user).
+
+**2. Build and install.** The tests are the same as in CI and take about a minute.
+
+```
+cd /opt/pdu-monitor/server
+go test ./...
+CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$(git rev-parse --short HEAD)" -o pdumonitord ./cmd/pdumonitord
+sudo ./deploy/install.sh --binary ./pdumonitord
+```
+
+`install.sh` creates the user `pdumonitor`, `/usr/local/bin/pdumonitord`, the systemd unit, `/etc/pdu-monitor/config.yaml` and
+`/var/lib/pdu-monitor`. Running it again never overwrites the configuration, the database or the keys.
+
+**3. The certificate.** `tls.crt` is the certificate of the server followed by the intermediate certificates (the full chain), in PEM;
+`tls.key` is its private key in PEM, without a passphrase. A wildcard certificate is fine. The service runs as `pdumonitor`, so the
+group must be able to read them:
+
+```
+sudo install -m 644 -o root -g pdumonitor fullchain.pem /etc/pdu-monitor/tls.crt
+sudo install -m 640 -o root -g pdumonitor privkey.pem   /etc/pdu-monitor/tls.key
+```
+
+A renewed certificate is copied the same way; the server reads it again within a minute, without a restart.
+
+**4. The directory password.** One line, the password of the account in `ldap.bind_dn`:
+
+```
+sudo sh -c 'umask 027; printf "%s" "THE-PASSWORD" > /etc/pdu-monitor/ldap-bind-password'
+sudo chown root:pdumonitor /etc/pdu-monitor/ldap-bind-password
+sudo chmod 640 /etc/pdu-monitor/ldap-bind-password
+```
+
+**5. The configuration.** Edit `/etc/pdu-monitor/config.yaml` and replace every `replace_me` (see
+[Directory (LDAP) login](#directory-ldap-login)). Keep `listen` as `":8443"` or an IP address; the name people type
+(`pdumonitor.replace_me`) only has to be in the DNS and in the certificate. Port 443 instead of 8443: remove the `#` before
+`AmbientCapabilities=CAP_NET_BIND_SERVICE` in `/etc/systemd/system/pdu-monitor.service`, then `sudo systemctl daemon-reload`.
+
+**6. Check the login, then start.** Always run the program as `pdumonitor`, never as root: files that root creates in
+`/var/lib/pdu-monitor` cannot be opened by the service afterwards.
+
+```
+sudo -u pdumonitor pdumonitord ldap-test -config /etc/pdu-monitor/config.yaml -user YOURLOGIN
+sudo systemctl start pdu-monitor
+sudo systemctl status pdu-monitor
+journalctl -u pdu-monitor -f
+```
+
+`ldap-test` should end with `role "admin"`. If it lists your groups but the role is empty, `ldap.roles` names a group you are not in.
+Then open `https://pdumonitor.replace_me:8443`. The log line "ConfigurationDirectory 'pdu-monitor' already exists but the mode is
+different" is harmless: `/etc/pdu-monitor` is 750 on purpose.
+
+**If the service does not start** but works when started by hand as root, the permissions are wrong. `journalctl -u pdu-monitor -n 20`
+names the file. Put them right with:
+
+```
+sudo chown -R pdumonitor:pdumonitor /var/lib/pdu-monitor
+sudo chown root:pdumonitor /etc/pdu-monitor/config.yaml /etc/pdu-monitor/tls.crt /etc/pdu-monitor/tls.key /etc/pdu-monitor/ldap-bind-password
+sudo chmod 640 /etc/pdu-monitor/config.yaml /etc/pdu-monitor/tls.key /etc/pdu-monitor/ldap-bind-password
+sudo systemctl restart pdu-monitor
+```
+
+**7. Hypervisors.** The agent is in `/opt/pdu-monitor/hostagent`. Print the key of this server, copy the folder to each hypervisor and
+install it there with that key (see [Hypervisors](#hypervisors) for confirming the host key in the web interface):
+
+```
+sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml
+scp -r /opt/pdu-monitor/hostagent root@HYPERVISOR:/root/
+ssh root@HYPERVISOR '/root/hostagent/install.sh --key "THE KEY" --from SERVER-IP'
+```
+
+**Update.** The configuration, the database and the keys stay as they are:
+
+```
+cd /opt/pdu-monitor && git pull
+cd server && go test ./...
+CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$(git rev-parse --short HEAD)" -o pdumonitord ./cmd/pdumonitord
+sudo ./deploy/install.sh --binary ./pdumonitord
+sudo systemctl restart pdu-monitor
+```
+
+`journalctl -u pdu-monitor` shows the new version (the commit) on the line "listening on".
+
 ## Directory (LDAP) login
 
-Only people who belong to a group named in `ldap.roles` can log in; everybody else gets the same "wrong user or password" as a wrong
-password. Roles: `admin` (everything), `operator` (switch outlets, rename), `viewer` (look). The decision is "admins only" for now:
+Only people who belong to a group named in `ldap.roles` can log in. A wrong user or password gets "wrong user or password"; a
+right password of somebody outside the groups gets "this account is not in a group that may use this application". Roles: `admin` (everything), `operator` (switch outlets, rename), `viewer` (look). The decision is "admins only" for now:
 only `admin: [admins]` is configured.
 
 * OpenLDAP: `user_filter: "(uid={username})"`, set `group_base` (groups with `member`, `uniqueMember` or `memberUid`), or `member_of_attr: memberOf` if

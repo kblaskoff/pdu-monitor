@@ -726,3 +726,30 @@ func TestOneUserCannotUseAnotherUsersSession(t *testing.T) {
 		t.Fatalf("%d", resp.StatusCode)
 	}
 }
+
+// A fresh install has no racks yet: the lists must still be lists, the settings page cannot work with null.
+func TestEmptyDatabaseGivesEmptyLists(t *testing.T) {
+	e := newEnv(t)
+	admin := e.login("anna")
+	_, cfg := admin.call("GET", "/api/admin/config", nil)
+	for _, r := range list(cfg["racks"]) {
+		if status, _ := admin.call("DELETE", "/api/admin/racks/"+itoa(int(obj(r)["id"].(float64))), nil); status != 200 {
+			t.Fatalf("delete rack: %d", status)
+		}
+	}
+	for _, h := range list(cfg["hosts"]) {
+		if status, _ := admin.call("DELETE", "/api/admin/hosts/"+itoa(int(obj(h)["id"].(float64))), nil); status != 200 {
+			t.Fatalf("delete host: %d", status)
+		}
+	}
+	_, data := admin.raw("GET", "/api/admin/config", nil, nil)
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"racks", "pdus", "hosts", "collectors"} {
+		if string(out[key]) != "[]" {
+			t.Errorf("%s: %s, want []", key, out[key])
+		}
+	}
+}
