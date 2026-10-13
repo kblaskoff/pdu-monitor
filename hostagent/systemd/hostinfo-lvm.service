@@ -1,0 +1,22 @@
+[Unit]
+Description=Read the LVM volume groups for hostinfo (needs root, writes one file)
+Documentation=file:///usr/share/doc/hostinfo/README.md
+ConditionPathExists=/var/lib/hostinfo
+
+[Service]
+Type=oneshot
+# the only part of hostinfo that runs as root: it runs `vgs` and `lvs` (fixed arguments, read only) and writes /var/lib/hostinfo/lvm.json
+ExecStart=/usr/local/sbin/hostinfo lvm-collect
+UMask=0027
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes

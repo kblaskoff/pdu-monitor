@@ -29,12 +29,8 @@ type Status struct {
 		SwapUsed  int64  `json:"swap_used"`
 		ZfsArc    *int64 `json:"zfs_arc"`
 	} `json:"mem"`
-	Storage *struct {
-		T     int64  `json:"t"`
-		Zfs   bool   `json:"zfs"`
-		Pools []Pool `json:"pools"`
-	} `json:"storage"`
-	VMs struct {
+	Storage *Storage `json:"storage"`
+	VMs     struct {
 		Count int  `json:"count"`
 		List  []VM `json:"list"`
 	} `json:"vms"`
@@ -44,6 +40,15 @@ type Status struct {
 		Python  string `json:"python"`
 	} `json:"agent"`
 	Errors []string `json:"errors"`
+}
+
+// Storage is what the host says about its disks: ZFS pools, LVM volume groups and the mounted local filesystems.
+type Storage struct {
+	T     int64        `json:"t"`
+	Zfs   bool         `json:"zfs"`
+	Pools []Pool       `json:"pools"`
+	LVM   []VG         `json:"lvm"`
+	FS    []Filesystem `json:"fs"`
 }
 
 // Pool is a ZFS pool: size/alloc/free are raw (they include the parity of raidz), usable_* is what the datasets can really hold.
@@ -58,6 +63,43 @@ type Pool struct {
 	UsableAvail *int64 `json:"usable_avail,omitempty"`
 	UsableTotal *int64 `json:"usable_total,omitempty"`
 }
+
+// VG is an LVM volume group. Fill lists what can run full on its own: thin pools and old style snapshots.
+type VG struct {
+	Name string       `json:"name"`
+	Size int64        `json:"size"`
+	Free int64        `json:"free"`
+	PVs  int          `json:"pvs"`
+	LVs  int          `json:"lvs"`
+	Fill []FillVolume `json:"fill,omitempty"`
+}
+
+// FillVolume is a thin pool or a snapshot of a volume group, with how full it is (percent, nil when the host did not say).
+type FillVolume struct {
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Size    int64    `json:"size"`
+	DataPct *float64 `json:"data_pct"`
+	MetaPct *float64 `json:"meta_pct"`
+}
+
+// Filesystem is a mounted local filesystem (ext4, xfs, ...): the root filesystem filling up stops a host as well as a full pool.
+type Filesystem struct {
+	Mount string `json:"mount"`
+	Dev   string `json:"dev"`
+	Type  string `json:"type"`
+	Size  int64  `json:"size"`
+	Used  int64  `json:"used"`
+	Avail int64  `json:"avail"`
+}
+
+// the most that is kept of what a host says about its storage
+const (
+	maxPools       = 50
+	maxVGs         = 20
+	maxFillPerVG   = 50
+	maxFilesystems = 30
+)
 
 // VM is one running virtual machine; Cores is the CPU it used since the previous sample (1.25 = a core and a quarter).
 type VM struct {
@@ -159,12 +201,33 @@ func ParseStatus(data []byte) (*Status, error) {
 		s.VMs.List[i].Name = clean(s.VMs.List[i].Name)
 	}
 	if s.Storage != nil {
-		if len(s.Storage.Pools) > 50 {
-			s.Storage.Pools = s.Storage.Pools[:50]
+		st := s.Storage
+		if len(st.Pools) > maxPools {
+			st.Pools = st.Pools[:maxPools]
 		}
-		for i := range s.Storage.Pools {
-			s.Storage.Pools[i].Name = clean(s.Storage.Pools[i].Name)
-			s.Storage.Pools[i].Health = clean(s.Storage.Pools[i].Health)
+		for i := range st.Pools {
+			st.Pools[i].Name = clean(st.Pools[i].Name)
+			st.Pools[i].Health = clean(st.Pools[i].Health)
+		}
+		if len(st.LVM) > maxVGs {
+			st.LVM = st.LVM[:maxVGs]
+		}
+		for i := range st.LVM {
+			g := &st.LVM[i]
+			g.Name = clean(g.Name)
+			if len(g.Fill) > maxFillPerVG {
+				g.Fill = g.Fill[:maxFillPerVG]
+			}
+			for j := range g.Fill {
+				g.Fill[j].Name, g.Fill[j].Kind = clean(g.Fill[j].Name), clean(g.Fill[j].Kind)
+			}
+		}
+		if len(st.FS) > maxFilesystems {
+			st.FS = st.FS[:maxFilesystems]
+		}
+		for i := range st.FS {
+			f := &st.FS[i]
+			f.Mount, f.Dev, f.Type = clean(f.Mount), clean(f.Dev), clean(f.Type)
 		}
 	}
 	if len(s.Errors) > 20 {

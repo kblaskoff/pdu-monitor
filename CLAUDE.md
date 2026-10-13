@@ -16,7 +16,7 @@ Three parts in one repository:
 | Part | Where | Language | State |
 |---|---|---|---|
 | **Server** (web UI with its login, API, PDU polling) | `server/` (module `github.com/kblaskoff/pdu-monitor/server`) | Go | the main product; installed on the owner's server from a clone, the LDAP login works against the real directory; not yet tried against real PDUs |
-| **Host agent** (samples a hypervisor once a minute) | `hostagent/` | Python 3.9 stdlib | running on one real hypervisor (AlmaLinux 9) |
+| **Host agent** (samples a hypervisor once a minute) | `hostagent/` | Python stdlib, must stay 3.6-compatible (AlmaLinux 8 hosts) | running on real hypervisors: ZFS (Debian 13), LVM (AlmaLinux 8); agent 0.2.0 adds LVM + filesystems |
 | **Collector** (`pdu-collector`, passive reader of hypervisors) | `server/cmd/pdu-collector`, `server/internal/collector` | Go | tested, not tried on real hosts |
 | Mac app (the first version) | `Sources/`, `Tests/`, `Package.swift` | Swift / SwiftUI | works and was tested by the owner; superseded by the web server, not removed |
 
@@ -31,6 +31,8 @@ Three parts in one repository:
 * **PDUs are always read by the server** (SNMP v1; communities are encrypted in the database with `secret.key`).
 * **Hypervisors: no SNMP.** The agent (`hostagent/hostinfo.py`) runs from a systemd timer as the account `hostinfo` (root only where `/proc` has `hidepid` or `zpool` needs it), writes plain files; a read-only
   user (`hostinfo-ro`) with a forced-command SSH key can only run `status` and `top 1h|6h|24h|7d`. Format: `hostagent/FORMAT.md` (format 1).
+  Storage: ZFS pools (`zpool`/`zfs`), LVM volume groups (`vgs`/`lvs` need root: a separate root timer `hostinfo-lvm` writes `lvm.json`), mounted filesystems (statvfs).
+  The key line has `from="ADDRESS"`: it must be the address the host *sees* (NAT!); sshd logs "correct key but not from a permitted host" otherwise.
   Reading is done either by the server itself over SSH, or by a **collector**.
 * **Host keys are pinned.** A person compares the fingerprint with the one on the host and types it (web UI for the server, `pdu-collector trust`
   for the collector). There is no silent trust-on-first-use.

@@ -291,6 +291,70 @@ func TestParseStatusCleansAndLimits(t *testing.T) {
 	}
 }
 
+// What a host with LVM and no ZFS says (agent 0.2.0): the volume group, a nearly full thin pool, the mounted filesystems.
+const lvmStatusJSON = `{"v":1,"host":"kvmsfc5","t":1760000000,"interval":60,"cpu":{"cores":128,"idle_pct":70.6,"iowait_pct":0.1,"load":[33.9,30.8,30.8]},
+"mem":{"total":1068804202496,"available":386284560384,"used":682519642112,"swap_used":0},
+"storage":{"pools":[],"zfs":false,"t":1760000000,
+"lvm":[{"name":"am","size":22888000000000,"free":4806000000000,"pvs":1,"lvs":133,"fill":[{"name":"thin","kind":"thin-pool","size":1000000000000,"data_pct":91.5,"meta_pct":null}]}],
+"fs":[{"mount":"/","dev":"/dev/md126","type":"ext4","size":49000000000,"used":6000000000,"avail":40000000000},{"mount":"/home/solusvm","dev":"/dev/mapper/am-solusvm","type":"ext4","size":126000000000,"used":69000000000,"avail":47000000000}]},
+"vms":{"count":0,"list":[]},"agent":{"version":"0.2.0","python":"3.6.8"},"errors":[]}`
+
+func TestParseStatusWithLVMAndFilesystems(t *testing.T) {
+	s, err := ParseStatus([]byte(lvmStatusJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := s.Storage
+	if st == nil || len(st.Pools) != 0 || len(st.LVM) != 1 || len(st.FS) != 2 {
+		t.Fatalf("%+v", st)
+	}
+	vg := st.LVM[0]
+	if vg.Name != "am" || vg.Size != 22888000000000 || vg.Free != 4806000000000 || vg.PVs != 1 || vg.LVs != 133 || len(vg.Fill) != 1 {
+		t.Fatalf("%+v", vg)
+	}
+	if f := vg.Fill[0]; f.Kind != "thin-pool" || f.DataPct == nil || *f.DataPct != 91.5 || f.MetaPct != nil {
+		t.Errorf("a percentage that the host did not say must stay unknown: %+v", f)
+	}
+	if st.FS[1].Mount != "/home/solusvm" || st.FS[1].Avail != 47000000000 {
+		t.Errorf("%+v", st.FS)
+	}
+	// an agent from before LVM (0.1.0) has neither: that is fine
+	old, err := ParseStatus([]byte(statusJSON))
+	if err != nil || len(old.Storage.LVM) != 0 || len(old.Storage.FS) != 0 {
+		t.Fatalf("%v %+v", err, old)
+	}
+}
+
+func TestParseStatusCleansAndLimitsTheStorage(t *testing.T) {
+	var groups, fs []string
+	for i := 0; i < 40; i++ {
+		groups = append(groups, `{"name":"vg`+strings.Repeat("x", 150)+`","size":1,"free":1,"pvs":1,"lvs":1}`)
+		fs = append(fs, `{"mount":"/m\u001b[31m`+strings.Repeat("y", 150)+`","dev":"d","type":"ext4","size":1,"used":1,"avail":0}`)
+	}
+	data := `{"v":1,"host":"h","t":1,"storage":{"lvm":[` + strings.Join(groups, ",") + `],"fs":[` + strings.Join(fs, ",") + `]},"vms":{"count":0,"list":[]}}`
+	s, err := ParseStatus([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Storage.LVM) != maxVGs || len(s.Storage.FS) != maxFilesystems {
+		t.Fatalf("not limited: %d %d", len(s.Storage.LVM), len(s.Storage.FS))
+	}
+	for _, g := range s.Storage.LVM {
+		if len([]rune(g.Name)) > 100 {
+			t.Fatalf("name not cut: %d", len(g.Name))
+		}
+	}
+	for _, f := range s.Storage.FS {
+		if strings.ContainsRune(f.Mount, 0x1b) || len([]rune(f.Mount)) > 100 {
+			t.Fatalf("mount not cleaned: %q", f.Mount)
+		}
+	}
+	// a number of the wrong kind is rejected here too
+	if _, err := ParseStatus([]byte(strings.Replace(lvmStatusJSON, `"free":4806000000000`, `"free":"much"`, 1))); err == nil {
+		t.Fatal("a string for a number")
+	}
+}
+
 func TestParseTop(t *testing.T) {
 	top, err := ParseTop([]byte(topJSON), "6h")
 	if err != nil || len(top.VMs) != 1 || top.VMs[0].PeakCores != 8.1 {

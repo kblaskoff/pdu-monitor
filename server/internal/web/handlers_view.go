@@ -85,33 +85,35 @@ func (d *pduData) rackBrief(r store.Rack) rackBrief {
 // ---- hosts
 
 type hostBrief struct {
-	ID         int64           `json:"id"`
-	Name       string          `json:"name"`
-	Address    string          `json:"address"`
-	Port       int             `json:"port"`
-	RackID     *int64          `json:"rackId"`
-	RackName   string          `json:"rackName,omitempty"`
-	OutletKey  string          `json:"outletKey"`
-	Enabled    bool            `json:"enabled"`
-	Trusted    bool            `json:"trusted"`
-	Collector  string          `json:"collector,omitempty"`
-	Online     bool            `json:"online"`
-	Stale      bool            `json:"stale"`
-	AgeSeconds *int64          `json:"ageSeconds"`
-	Error      string          `json:"error,omitempty"`
-	Cores      *int            `json:"cores"`
-	IdlePct    *float64        `json:"idlePct"`
-	Load       []float64       `json:"load,omitempty"`
-	MemUsed    *int64          `json:"memUsed"`
-	MemTotal   *int64          `json:"memTotal"`
-	MemArc     *int64          `json:"memArc"`
-	VMs        *int            `json:"vms"`
-	Pools      []hostinfo.Pool `json:"pools,omitempty"`
-	Agent      string          `json:"agent,omitempty"`
-	Problems   []string        `json:"problems,omitempty"`
-	Power      *powerView      `json:"power,omitempty"`
-	VMList     []hostinfo.VM   `json:"vmList,omitempty"`
-	OtherCores *float64        `json:"otherCores"`
+	ID         int64                 `json:"id"`
+	Name       string                `json:"name"`
+	Address    string                `json:"address"`
+	Port       int                   `json:"port"`
+	RackID     *int64                `json:"rackId"`
+	RackName   string                `json:"rackName,omitempty"`
+	OutletKey  string                `json:"outletKey"`
+	Enabled    bool                  `json:"enabled"`
+	Trusted    bool                  `json:"trusted"`
+	Collector  string                `json:"collector,omitempty"`
+	Online     bool                  `json:"online"`
+	Stale      bool                  `json:"stale"`
+	AgeSeconds *int64                `json:"ageSeconds"`
+	Error      string                `json:"error,omitempty"`
+	Cores      *int                  `json:"cores"`
+	IdlePct    *float64              `json:"idlePct"`
+	Load       []float64             `json:"load,omitempty"`
+	MemUsed    *int64                `json:"memUsed"`
+	MemTotal   *int64                `json:"memTotal"`
+	MemArc     *int64                `json:"memArc"`
+	VMs        *int                  `json:"vms"`
+	Pools      []hostinfo.Pool       `json:"pools,omitempty"`
+	LVM        []hostinfo.VG         `json:"lvm,omitempty"`
+	FS         []hostinfo.Filesystem `json:"fs,omitempty"`
+	Agent      string                `json:"agent,omitempty"`
+	Problems   []string              `json:"problems,omitempty"`
+	Power      *powerView            `json:"power,omitempty"`
+	VMList     []hostinfo.VM         `json:"vmList,omitempty"`
+	OtherCores *float64              `json:"otherCores"`
 }
 
 // powerView is what the PDUs say about the cables of a host.
@@ -182,7 +184,10 @@ func (s *Server) hostBriefs(ctx context.Context, d *pduData, full bool) ([]hostB
 			n := stat.VMs.Count
 			b.VMs = &n
 			if stat.Storage != nil {
-				b.Pools = stat.Storage.Pools
+				b.Pools, b.LVM = stat.Storage.Pools, stat.Storage.LVM
+				if full {
+					b.FS = stat.Storage.FS // only the page of one host needs the list of filesystems
+				}
 			}
 			b.Agent = stat.Agent.Version
 			b.Problems = stat.Errors

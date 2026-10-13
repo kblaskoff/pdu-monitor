@@ -426,6 +426,16 @@ function poolTotals(pools) {
   }
   return { total, avail, bad };
 }
+// what the host has for storage: ZFS pools (usable space) or, without them, LVM volume groups (free space of the group)
+function storageOf(x) {
+  const z = poolTotals(x.pools);
+  if (z) return { kind: 'zfs', total: z.total, avail: z.avail, bad: z.bad };
+  if (x.lvm && x.lvm.length) return { kind: 'lvm', total: x.lvm.reduce((a, g) => a + g.size, 0), avail: x.lvm.reduce((a, g) => a + g.free, 0), bad: null };
+  return null;
+}
+// a thin pool or snapshot that is nearly full is the dangerous one: the busiest of its two percentages decides
+const fillPct = (f) => Math.max(f.data_pct == null ? 0 : f.data_pct, f.meta_pct == null ? 0 : f.meta_pct);
+const fillClass = (pctv) => (pctv >= 90 ? 'over' : (pctv >= 80 ? 'warning' : 'ok'));
 function hostDot(x) {
   const st = !x.enabled ? 'unknown' : (!x.trusted ? 'warning' : (x.online ? 'ok' : (x.stale ? 'warning' : 'over')));
   const why = !x.enabled ? 'disabled' : (!x.trusted ? 'the key of this host is not confirmed yet' : (x.online ? 'online' : (x.error || (x.stale ? 'the data is old' : 'no answer'))));
@@ -441,8 +451,8 @@ async function viewHosts() {
   const cols = {
     name: (x) => x.name.toLowerCase(), rack: (x) => (x.rackName || '') + (x.outletKey || ''), idle: (x) => x.idlePct, load: (x) => (x.load ? x.load[1] : null), cores: (x) => x.cores,
     used: (x) => x.memUsed, free: (x) => (x.memTotal != null ? x.memTotal - x.memUsed : null), total: (x) => x.memTotal,
-    stotal: (x) => (poolTotals(x.pools) || {}).total, sfree: (x) => { const t = poolTotals(x.pools); return t ? t.avail / t.total : null; },
-    zfs: (x) => ((poolTotals(x.pools) || {}).bad ? 0 : 1), vms: (x) => x.vms, watts: (x) => (x.power ? x.power.watts : null), age: (x) => x.ageSeconds };
+    stotal: (x) => (storageOf(x) || {}).total, sfree: (x) => { const t = storageOf(x); return t ? t.avail / t.total : null; },
+    zfs: (x) => ((storageOf(x) || {}).bad ? 0 : 1), vms: (x) => x.vms, watts: (x) => (x.power ? x.power.watts : null), age: (x) => x.ageSeconds };
   function draw() {
     let hosts = data.hosts.filter((x) => !filter || (x.name + ' ' + (x.rackName || '') + ' ' + (x.outletKey || '')).toLowerCase().includes(filter));
     const get = cols[sort.key];
@@ -450,7 +460,7 @@ async function viewHosts() {
     const th = (key, label, num) => h('th', { class: 'sortable' + (num ? ' num' : ''), onclick: () => { sort.dir = sort.key === key ? -sort.dir : 1; sort.key = key; draw(); } }, label + (sort.key === key ? (sort.dir > 0 ? ' ↑' : ' ↓') : ''));
     const group = (cls, text, span) => h('th', { class: 'group-head ' + cls, colspan: span, style: 'text-align:center' }, text);
     const rows = hosts.map((x) => {
-      const st = poolTotals(x.pools);
+      const st = storageOf(x);
       const freeFrac = st ? st.avail / st.total : null;
       const memFree = x.memTotal != null ? x.memTotal - x.memUsed : null;
       return h('tr', { class: x.online ? '' : 'dim' },
@@ -460,7 +470,7 @@ async function viewHosts() {
         h('td', { class: 'num' }, gib(x.memUsed)), h('td', { class: 'num' }, gib(memFree)), h('td', { class: 'num' }, gib(x.memTotal)),
         h('td', { class: 'num' }, st ? tib(st.total) : '—'),
         h('td', { class: 'num ' + freeClass(freeFrac) }, st ? `${tib(st.avail)} (${Math.round(freeFrac * 100)}%)` : '—'),
-        h('td', {}, st ? (st.bad ? h('span', { class: 'pill over' }, st.bad) : h('span', { class: 'pill ok' }, 'ONLINE')) : h('span', { class: 'muted' }, '—')),
+        h('td', {}, st ? (st.kind === 'lvm' ? h('span', { class: 'pill unknown' }, 'LVM') : (st.bad ? h('span', { class: 'pill over' }, st.bad) : h('span', { class: 'pill ok' }, 'ONLINE'))) : h('span', { class: 'muted' }, '—')),
         h('td', { class: 'num' }, x.vms == null ? '—' : x.vms), h('td', { class: 'num' }, x.power ? fW(x.power.watts) : '—'),
         h('td', { class: 'num muted' }, x.ageSeconds == null ? (x.error ? h('span', { class: 'c-warning', title: x.error }, 'no data') : '—') : ago(x.ageSeconds)));
     });
@@ -470,10 +480,10 @@ async function viewHosts() {
     const table = h('div', { class: 'tablewrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', { colspan: 2 }), group('g-compute', 'Compute', 3), group('g-mem', 'Mem', 3), group('g-storage', 'Storage', 3), group('g-info', '', 3)),
         h('tr', {}, th('name', 'Host'), th('rack', 'Rack · unit'), th('idle', 'Idle %', 1), th('load', '5m load', 1), th('cores', 'Cores', 1), th('used', 'Used (G)', 1), th('free', 'Free (G)', 1), th('total', 'Total (G)', 1),
-          th('stotal', 'Total (T)', 1), th('sfree', 'Free (T)', 1), th('zfs', 'ZFS'), th('vms', 'VMs', 1), th('watts', 'Power (W)', 1), th('age', 'Age', 1))),
+          th('stotal', 'Total (T)', 1), th('sfree', 'Free (T)', 1), th('zfs', 'Pool'), th('vms', 'VMs', 1), th('watts', 'Power (W)', 1), th('age', 'Age', 1))),
       h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 14, class: 'muted' }, data.hosts.length ? 'No host matches.' : 'No hosts yet.' + (isAdmin() ? ' Add them in Settings → Hosts.' : ''))))));
     mount('hosts', h('div', {}, h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', {}, 'Hypervisors'), h('div', { class: 'muted' }, `${data.hosts.length} hosts` + (bad ? ` · ${bad} without current data` : ''))), search), table,
-      h('p', { class: 'note' }, 'Click a host to see which VMs load it. "Free" is what the host can still give out (memory: available; storage: usable space of the ZFS pools, not the raw size with parity).')));
+      h('p', { class: 'note' }, 'Click a host to see which VMs load it. "Free" is what the host can still give out (memory: available; storage: usable space of the ZFS pools, not the raw size with parity; or the free space of the LVM volume groups).')));
   }
   const load = async () => { data = await api('GET', '/api/hosts'); draw(); };
   await load();
@@ -506,20 +516,40 @@ async function viewHost(id) {
     const memCard = h('div', { class: 'card' }, h('h3', {}, 'Memory'), memTotal == null ? h('p', { class: 'muted' }, 'No data') : [
       h('div', { class: 'stat', style: 'margin:8px 0' }, h('div', { class: 'value' }, gib(memUsed), h('small', {}, ` G used of ${gib(memTotal)} G`))),
       h('div', { class: 'bar stack' }, seg('', vmMem, 'var(--accent)'), seg('', arc, '#9b59b6'), seg('', other, 'var(--unk)')),
-      h('div', { class: 'note' }, h('span', { style: 'color:var(--accent)' }, '■ '), `VMs ${gib(vmMem)} G   `, h('span', { style: 'color:#9b59b6' }, '■ '), `ZFS cache ${gib(arc)} G   `, h('span', { style: 'color:var(--unk)' }, '■ '), `other ${gib(other)} G   · available ${gib(memTotal - memUsed)} G`)]);
+      h('div', { class: 'note' }, h('span', { style: 'color:var(--accent)' }, '■ '), `VMs ${gib(vmMem)} G   `, x.memArc != null ? [h('span', { style: 'color:#9b59b6' }, '■ '), `ZFS cache ${gib(arc)} G   `] : null, h('span', { style: 'color:var(--unk)' }, '■ '), `other ${gib(other)} G   · available ${gib(memTotal - memUsed)} G`)]);
     const cpuCard = h('div', { class: 'card' }, h('h3', {}, 'Processor'), x.idlePct == null ? h('p', { class: 'muted' }, 'No data') : [
       h('div', { class: 'stat', style: 'margin:8px 0' }, h('div', { class: 'value ' + idleClass(x.idlePct) }, Math.round(x.idlePct), h('small', {}, ' % idle'))),
       bar((100 - x.idlePct) / 100, x.idlePct < 15 ? 'over' : (x.idlePct < 40 ? 'warning' : 'ok')),
       h('dl', { class: 'kv', style: 'margin-top:10px' }, h('dt', {}, 'Cores'), h('dd', {}, x.cores == null ? '—' : x.cores), h('dt', {}, 'Load 1 / 5 / 15 min'), h('dd', {}, x.load ? x.load.map((v) => Math.round(v * 10) / 10).join(' / ') : '—'),
         h('dt', {}, 'VMs running'), h('dd', {}, x.vms == null ? '—' : x.vms), x.otherCores != null ? [h('dt', {}, 'Host itself'), h('dd', {}, nf(x.otherCores, 2) + ' cores')] : null)]);
-    const storCard = h('div', { class: 'card' }, h('h3', {}, 'Storage (ZFS)'), !x.pools || !x.pools.length ? h('p', { class: 'muted' }, 'No ZFS pool reported') : x.pools.map((p) => {
+    const zfsCards = (x.pools || []).map((p) => {
       const total = p.usable_total != null ? p.usable_total : p.size, avail = p.usable_avail != null ? p.usable_avail : p.free;
       const f = total ? avail / total : null;
-      return h('div', { style: 'margin-top:8px' }, h('div', { style: 'display:flex;gap:10px;align-items:center' }, h('strong', {}, p.name), h('span', { class: 'pill ' + (p.health === 'ONLINE' ? 'ok' : 'over') }, p.health)),
+      return h('div', { style: 'margin-top:8px' }, h('div', { style: 'display:flex;gap:10px;align-items:center' }, h('strong', {}, p.name), h('span', { class: 'pill ' + (p.health === 'ONLINE' ? 'ok' : 'over') }, p.health), h('span', { class: 'muted small' }, 'ZFS')),
         h('div', { class: 'stat', style: 'margin:6px 0' }, h('div', { class: 'value ' + freeClass(f) }, tib(avail), h('small', {}, ` T free of ${tib(total)} T usable (${Math.round(f * 100)}%)`))),
         bar(total ? 1 - avail / total : null, f != null && f < 0.1 ? 'over' : (f != null && f < 0.2 ? 'warning' : 'ok'), true),
         h('div', { class: 'note' }, `Raw: ${tib(p.size)} T, ${p.cap_pct}% allocated (includes the parity of raidz).`));
-    }));
+    });
+    const lvmCards = (x.lvm || []).map((g) => {
+      const f = g.size ? g.free / g.size : null;
+      return h('div', { style: 'margin-top:8px' }, h('div', { style: 'display:flex;gap:10px;align-items:center' }, h('strong', {}, g.name), h('span', { class: 'muted small' }, 'LVM volume group')),
+        h('div', { class: 'stat', style: 'margin:6px 0' }, h('div', { class: 'value ' + freeClass(f) }, tib(g.free), h('small', {}, ` T free of ${tib(g.size)} T (${Math.round(f * 100)}%)`))),
+        bar(g.size ? 1 - g.free / g.size : null, f != null && f < 0.1 ? 'over' : (f != null && f < 0.2 ? 'warning' : 'ok'), true),
+        h('div', { class: 'note' }, `${g.lvs} logical volume${g.lvs === 1 ? '' : 's'} on ${g.pvs} physical volume${g.pvs === 1 ? '' : 's'}.`),
+        (g.fill || []).map((v) => {
+          const p = fillPct(v);
+          return h('div', { style: 'margin-top:6px' }, h('div', { class: 'small', style: 'display:flex;justify-content:space-between' }, h('span', {}, `${v.kind === 'thin-pool' ? 'Thin pool' : 'Snapshot'} ${v.name}`),
+            h('span', { class: 'c-' + (p >= 90 ? 'over' : (p >= 80 ? 'warning' : 'ok')) }, `${nf(v.data_pct, 0)}% data` + (v.meta_pct != null ? ` · ${nf(v.meta_pct, 0)}% metadata` : ''))), bar(p / 100, fillClass(p), true));
+        }));
+    });
+    const storCard = h('div', { class: 'card' }, h('h3', {}, 'Storage'), !zfsCards.length && !lvmCards.length ? h('p', { class: 'muted' }, 'No ZFS pool or LVM volume group reported') : [zfsCards, lvmCards]);
+    const fsCard = x.fs && x.fs.length ? h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', { style: 'margin-bottom:8px' }, 'Filesystems'),
+      h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Mounted on'), h('th', {}, 'Device'), h('th', {}, 'Type'), h('th', { class: 'num' }, 'Size (G)'), h('th', { class: 'num' }, 'Used (G)'), h('th', { class: 'num' }, 'Free (G)'), h('th', { style: 'width:160px' }, 'Use'))),
+        h('tbody', {}, x.fs.map((f) => {
+          const usedFrac = f.size ? f.used / f.size : null, freeFrac = f.size ? f.avail / f.size : null;
+          return h('tr', {}, h('td', { class: 'name' }, f.mount), h('td', { class: 'muted' }, f.dev), h('td', { class: 'muted' }, f.type), h('td', { class: 'num' }, gib(f.size)), h('td', { class: 'num' }, gib(f.used)),
+            h('td', { class: 'num ' + freeClass(freeFrac) }, gib(f.avail)), h('td', {}, h('div', { style: 'display:flex;gap:8px;align-items:center' }, h('div', { style: 'flex:1' }, bar(usedFrac, freeFrac != null && freeFrac < 0.1 ? 'over' : (freeFrac != null && freeFrac < 0.2 ? 'warning' : 'ok'), true)), h('span', { class: 'small muted' }, pct(usedFrac)))));
+        }))))) : null;
     const powerCard = x.power ? h('div', { class: 'card' }, h('h3', {}, 'Power (from the PDUs)'), h('div', { class: 'stat', style: 'margin:8px 0' }, h('div', { class: 'value' }, fW(x.power.watts), h('small', {}, ' W'))),
       h('div', { class: 'note' }, `Outlet ${x.power.server} · ${x.power.ports} port${x.power.ports === 1 ? '' : 's'} · ${x.power.state}  `, h('a', { href: '#/rack/' + x.power.rackId }, 'Open the rack'))) : null;
 
@@ -548,7 +578,7 @@ async function viewHost(id) {
     const vmCard = x.vmList && x.vmList.length ? h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', { style: 'margin-bottom:8px' }, 'VMs running now'),
       h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'VM'), h('th', { class: 'num' }, 'CPU now (cores)'), h('th', { class: 'num' }, 'Memory (G)'))),
         h('tbody', {}, x.vmList.slice().sort((a, b) => (b.cores || 0) - (a.cores || 0)).map((v) => h('tr', {}, h('td', { class: 'name' }, v.name), h('td', { class: 'num' }, nf(v.cores, 2)), h('td', { class: 'num' }, (v.rss / 2 ** 30).toFixed(1)))))))) : null;
-    mount('hosts', h('div', {}, head, warn, problems, h('div', { class: 'cards pdus', style: 'grid-template-columns:repeat(auto-fit,minmax(280px,1fr))' }, cpuCard, memCard, storCard, powerCard), topCard, vmCard));
+    mount('hosts', h('div', {}, head, warn, problems, h('div', { class: 'cards pdus', style: 'grid-template-columns:repeat(auto-fit,minmax(280px,1fr))' }, cpuCard, memCard, storCard, powerCard), fsCard, topCard, vmCard));
   }
   const hoursOf = (s) => (s >= 3600 ? (s / 3600).toFixed(1) + ' CPU-h' : Math.round(s / 60) + ' CPU-min');
   async function loadTop() {

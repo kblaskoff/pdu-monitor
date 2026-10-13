@@ -13,10 +13,13 @@ Fields may be added in later versions (`v` stays 1 while they are only added); m
   "mem": {"total": 1081000000000, "available": 480000000000, "used": 601000000000, "swap_used": 0, "zfs_arc": 120000000000},
   "storage": {"t": 1760000000, "zfs": true, "pools": [
      {"name": "pool", "size": 91534343012352, "alloc": 59918395113472, "free": 31615947898880, "cap_pct": 65, "health": "ONLINE",
-      "usable_used": 53246036254320, "usable_avail": 27960521023888, "usable_total": 81206557278208}]},
+      "usable_used": 53246036254320, "usable_avail": 27960521023888, "usable_total": 81206557278208}],
+     "lvm": [{"name": "am", "size": 22888000000000, "free": 4806000000000, "pvs": 1, "lvs": 133,
+              "fill": [{"name": "thinpool", "kind": "thin-pool", "size": 1000000000000, "data_pct": 42.5, "meta_pct": 7.25}]}],
+     "fs": [{"mount": "/", "dev": "/dev/md126", "type": "ext4", "size": 49000000000, "used": 6000000000, "avail": 40000000000}]},
   "vms": {"count": 12, "list": [{"name": "altar22", "pid": 4321, "rss": 8589934592, "cores": 1.25}]},
   "other_cores": 0.4,
-  "agent": {"version": "0.1.0", "python": "3.9.25"},
+  "agent": {"version": "0.2.0", "python": "3.9.25"},
   "errors": []
 }
 ```
@@ -27,7 +30,15 @@ Fields may be added in later versions (`v` stays 1 while they are only added); m
 * `mem.used` = total - available. On a ZFS host the ARC (`zfs_arc`) is part of "used" and is given apart, so a screen can show it.
 * `storage.pools[].size/alloc/free` are raw (a raidz1 pool counts its parity); `usable_*` is what the datasets can really hold. `health` is
   ONLINE / DEGRADED / FAULTED ...: anything but ONLINE needs attention. The pools are asked every 5 minutes (`storage.t`).
-* `errors` lists what could not be read (a VM, ZFS); the rest of the sample is still valid.
+* `storage.lvm` (agent 0.2.0, only on a host with LVM) lists the volume groups: `size` and `free` in bytes, `pvs` physical and `lvs` logical
+  volumes. `fill` lists what can run full on its own: thin pools and old style snapshots, with `data_pct` and `meta_pct` (percent, `null`
+  when LVM did not say). `vgs` and `lvs` need root, so they are asked by a separate root timer (`hostinfo lvm-collect`, every 5 minutes) that
+  writes `lvm.json`; the collector reads that file. If the file is older than 20 minutes it is not shown and `errors` says so. Without the file
+  (no LVM, or the timer is not installed) the key is absent.
+* `storage.fs` (agent 0.2.0) lists the mounted local filesystems (ext2/3/4, xfs, btrfs, f2fs, jfs, reiserfs), at most 30, a device once:
+  `mount`, `dev`, `type`, `size`, `used` and `avail` in bytes (`avail` is what a normal user can still write). ZFS datasets are not listed
+  here: they are in `pools`. A consumer must ignore keys it does not know: new ones are added without a new `v`.
+* `errors` lists what could not be read (a VM, ZFS, LVM); the rest of the sample is still valid.
 
 ## `hostinfo serve top 1h|6h|24h|7d`
 

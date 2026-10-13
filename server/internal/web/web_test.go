@@ -452,6 +452,34 @@ func itoa(n int) string {
 	return string(b)
 }
 
+func TestHostsWithLVMAndTheFilesystems(t *testing.T) {
+	e := newEnv(t)
+	c := e.login("vera")
+	_, out := c.call("GET", "/api/hosts", nil)
+	byName := map[string]map[string]any{}
+	for _, h := range list(out["hosts"]) {
+		byName[obj(h)["name"].(string)] = obj(h)
+	}
+	lvm := byName["a45sf"]
+	if len(list(lvm["lvm"])) != 1 || len(list(lvm["pools"])) != 0 {
+		t.Fatalf("an LVM host: %v", lvm)
+	}
+	if fill := list(obj(list(lvm["lvm"])[0])["fill"]); len(fill) != 1 || obj(fill[0])["data_pct"] != 91.4 {
+		t.Errorf("the nearly full thin pool: %v", fill)
+	}
+	if len(list(byName["a52sf"]["lvm"])) != 0 || len(list(byName["a52sf"]["pools"])) != 1 {
+		t.Errorf("a ZFS host: %v", byName["a52sf"])
+	}
+	if lvm["fs"] != nil {
+		t.Error("the list of all hosts does not carry the filesystems")
+	}
+	_, one := c.call("GET", "/api/hosts/"+itoa(int(lvm["id"].(float64))), nil)
+	fs := list(obj(one["host"])["fs"])
+	if len(fs) != 3 || obj(fs[0])["mount"] != "/" || obj(fs[2])["mount"] != "/home/solusvm" {
+		t.Errorf("filesystems of the host: %v", fs)
+	}
+}
+
 func TestHostsAndTheTopFiveOfAHost(t *testing.T) {
 	e := newEnv(t)
 	c := e.login("vera")

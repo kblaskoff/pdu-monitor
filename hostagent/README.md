@@ -5,18 +5,22 @@ the history of 7 days in plain files. The monitoring system reads it over SSH wi
 
 * **No network service.** Nothing listens. A systemd timer starts `hostinfo collect` once a minute; it takes about 40 ms and 10 MB of memory
   (measured: 40 ms of CPU for a sample, 5 MB for 7 days of 20 VMs, 0.16 s to answer a 7 day question).
-* **No root.** It runs as the account `hostinfo`, which only reads `/proc`, `/run/libvirt/qemu/*.pid` and asks `zpool`/`zfs`.
-  The SSH key logs in as a second account, `hostinfo-ro`, which can only read the collected files.
-* **No database, no dependencies.** Python 3.9 standard library only (AlmaLinux 9 has it). Files are described in [FORMAT.md](FORMAT.md).
+* **No root for the sampling.** It runs as the account `hostinfo`, which only reads `/proc`, `/run/libvirt/qemu/*.pid`, asks `zpool`/`zfs`
+  and measures the mounted filesystems. The SSH key logs in as a second account, `hostinfo-ro`, which can only read the collected files.
+  The one exception is **LVM**: `vgs` and `lvs` need root, so on a host with LVM a second timer (`hostinfo-lvm.timer`, every 5 minutes,
+  sandboxed) runs `hostinfo lvm-collect` as root. It runs those two commands with fixed, read-only arguments and writes one file
+  (`/var/lib/hostinfo/lvm.json`) that the unprivileged sampler reads.
+* **No database, no dependencies.** Python standard library only, 3.6 or newer (AlmaLinux 8 and 9, Debian and Ubuntu have it). Files are described in [FORMAT.md](FORMAT.md).
 * **Exact CPU numbers.** The CPU time of a VM is the counter of its qemu process; the difference of two readings is what it used in between.
   A short peak is not lost, and the top 5 of 1 h / 6 h / 24 h / 7 d are sums of real CPU time, not guesses from snapshots.
 
 What it shows: CPU idle % and load, cores, memory (used/available, ZFS ARC apart), ZFS pools (raw and usable space, health: a DEGRADED raidz1 is
-a warning), number of running VMs, CPU of every VM, the host's own CPU. It sees the VMs from outside: *which VM* loads the host, not which process inside a VM.
+a warning), LVM volume groups (size, free space, thin pools and snapshots that are filling up), the mounted local filesystems (the root
+filesystem filling up stops a host too), number of running VMs, CPU of every VM, the host's own CPU. It sees the VMs from outside: *which VM* loads the host, not which process inside a VM.
 
 ## Install (on each hypervisor, as root)
 
-The agent needs Python 3.9 (AlmaLinux / RHEL 9 have it) and nothing else. It is read by `pdumonitord` itself, or by a
+The agent needs Python 3.6 or newer (AlmaLinux / RHEL 8 and 9, Debian and Ubuntu have it) and nothing else. It is read by `pdumonitord` itself, or by a
 `pdu-collector` where the server cannot reach the hypervisors; the steps are the same, only the key differs. In the examples,
 `SERVER-IP` is the address the server (or the collector) connects from and `HYPERVISOR` is the host.
 
@@ -44,7 +48,8 @@ cd /opt/pdu-monitor/hostagent
 ```
 
 The script creates the accounts `hostinfo` (collects) and `hostinfo-ro` (what the key logs in as), installs `/usr/local/sbin/hostinfo`,
-`/var/lib/hostinfo` and the timer, writes the key line and ends with a dry run: the number of running VMs, the ZFS pools and any problem.
+`/var/lib/hostinfo` and the timer (and, if `vgs` exists, the LVM timer), writes the key line and ends with a dry run: the number of
+running VMs, the ZFS pools, the LVM volume groups, the filesystems and any problem.
 `--from` limits where the key may be used from (several addresses: `--from 10.0.0.5,10.0.0.6`). The key line is
 
 ```
@@ -115,6 +120,13 @@ Delete the host in Settings → Hosts as well.
 
 * **No VMs listed, `errors` mentions `/proc`:** `/proc` may be mounted with `hidepid`, so a normal account cannot see the qemu processes.
   Run the collector as root: `systemctl edit hostinfo-collect.service` → `[Service]` `User=root` `Group=root`.
+* **ssh is refused although the key is right:** `journalctl -u sshd | grep hostinfo` says *"correct key but not from a permitted host"* when the
+  server connects from another address than the one in `from="…"` (a router that translates addresses, another network interface). Use the address
+  that the log shows: `--from ADDRESS1,ADDRESS2`, or edit the `from=` in `~hostinfo-ro/.ssh/authorized_keys` (no restart of sshd is needed).
+* **No LVM on the screen although the host has it:** `systemctl status hostinfo-lvm.timer`, `systemctl start hostinfo-lvm.service`,
+  `journalctl -u hostinfo-lvm.service`, and look at `/var/lib/hostinfo/lvm.json`. The agent says `lvm: …` in its problems when the file is
+  missing the data or is older than 20 minutes. If the sandbox of `hostinfo-lvm.service` is too strict for the LVM version of the host,
+  loosen it with `systemctl edit hostinfo-lvm.service`.
 * **No storage although there is a pool:** the account `hostinfo` could not run `zpool` (the install script warns about it). Same remedy as above.
 * **SELinux:** `ausearch -m avc -ts recent`; the install script runs `restorecon`. The program is in `/usr/local/sbin` (type `bin_t`) on purpose.
 * **ssh asks for a password:** the key line is in `~hostinfo-ro/.ssh/authorized_keys`, the home and `.ssh` must not be writable by others; check `journalctl -u sshd`.

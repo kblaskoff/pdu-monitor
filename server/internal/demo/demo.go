@@ -199,7 +199,11 @@ func (r runner) Run(_ context.Context, h store.Host, command string) ([]byte, er
 		for _, v := range vms {
 			vmMem += v.rss
 		}
+		lvmHosts := map[string]bool{"a41sf": true, "a45sf": true, "a47sf": true} // hosts with LVM instead of ZFS, like the real kvmsfc5
 		arc := int64(80 << 30)
+		if lvmHosts[h.Name] {
+			arc = 0 // no ZFS, no ARC
+		}
 		s.Mem = &struct {
 			Total     int64  `json:"total"`
 			Available int64  `json:"available"`
@@ -207,25 +211,45 @@ func (r runner) Run(_ context.Context, h store.Host, command string) ([]byte, er
 			SwapUsed  int64  `json:"swap_used"`
 			ZfsArc    *int64 `json:"zfs_arc"`
 		}{Total: total, Used: vmMem + arc + (20 << 30), SwapUsed: 0, ZfsArc: &arc}
+		if lvmHosts[h.Name] {
+			s.Mem.ZfsArc = nil
+		}
 		s.Mem.Available = total - s.Mem.Used
-		if h.Name != "jbof5sf" {
+		switch {
+		case lvmHosts[h.Name]:
+			size := int64(22888000000000)
+			free := int64(float64(size) * (0.12 + 0.2*seed(h.Name).next()))
+			vg := hostinfo.VG{Name: "am", Size: size, Free: free, PVs: 1, LVs: len(vms) + 19}
+			if h.Name == "a45sf" { // a thin pool that is nearly full: what the screen must show in colour
+				one, two := 91.4, 12.0
+				vg.Fill = []hostinfo.FillVolume{{Name: "thinpool", Kind: "thin-pool", Size: 4_000_000_000_000, DataPct: &one, MetaPct: &two}}
+			}
+			s.Storage = &hostinfo.Storage{T: now.Unix(), LVM: []hostinfo.VG{vg}}
+		case h.Name != "jbof5sf":
 			raw := int64(91534343012352)
 			alloc := int64(float64(raw) * (0.55 + 0.1*seed(h.Name).next()))
 			ut, ua := int64(float64(raw)*0.887), int64(float64(raw)*0.887)-int64(float64(alloc)*0.887)
 			uu := ut - ua
-			s.Storage = &struct {
-				T     int64           `json:"t"`
-				Zfs   bool            `json:"zfs"`
-				Pools []hostinfo.Pool `json:"pools"`
-			}{T: now.Unix(), Zfs: true, Pools: []hostinfo.Pool{{Name: "pool", Size: raw, Alloc: alloc, Free: raw - alloc, CapPct: int(100 * alloc / raw), Health: "ONLINE",
+			s.Storage = &hostinfo.Storage{T: now.Unix(), Zfs: true, Pools: []hostinfo.Pool{{Name: "pool", Size: raw, Alloc: alloc, Free: raw - alloc, CapPct: int(100 * alloc / raw), Health: "ONLINE",
 				UsableUsed: &uu, UsableAvail: &ua, UsableTotal: &ut}}}
 			if h.Name == "a54sf" {
 				s.Storage.Pools[0].Health = "DEGRADED"
 			}
 		}
+		if s.Storage != nil {
+			const gb = int64(1) << 30
+			s.Storage.FS = []hostinfo.Filesystem{{Mount: "/", Dev: "/dev/md126", Type: "ext4", Size: 46 * gb, Used: 6 * gb, Avail: 38 * gb},
+				{Mount: "/boot", Dev: "/dev/md127", Type: "ext4", Size: 2 * gb, Used: gb / 4, Avail: 3 * gb / 2}}
+			if lvmHosts[h.Name] {
+				s.Storage.FS = append(s.Storage.FS, hostinfo.Filesystem{Mount: "/home/solusvm", Dev: "/dev/mapper/am-solusvm", Type: "ext4", Size: 118 * gb, Used: 69 * gb, Avail: 44 * gb})
+			}
+			if h.Name == "a50sf" { // a root filesystem that is nearly full
+				s.Storage.FS[0].Used, s.Storage.FS[0].Avail = 44*gb, 1*gb
+			}
+		}
 		other := 0.4
 		s.OtherCores = &other
-		s.Agent.Version, s.Agent.Python = "0.1.0", "3.9.25"
+		s.Agent.Version, s.Agent.Python = "0.2.0", "3.9.25"
 		s.Errors = []string{}
 		_ = heavy
 		return json.Marshal(s)

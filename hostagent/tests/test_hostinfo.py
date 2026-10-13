@@ -257,6 +257,159 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(hostinfo.collect(host.cfg, now=T0)["mem"]["zfs_arc"], 777)
 
 
+class FakeStatvfs(object):
+    def __init__(self, blocks, free, avail, frsize=4096):
+        self.f_blocks, self.f_bfree, self.f_bavail, self.f_frsize = blocks, free, avail, frsize
+
+
+VGS = "  am;22888000000000;4806000000000;1;133\n  vg2;1000;1000;2;0\n"
+LVS = ("  am;kvm1_img;-wi-ao----;21474836480;;\n"
+       "  am;thin;twi-aotz--;1000000000000;42.50;7.25\n"
+       "  am;snap1;swi-a-s---;5000000000;91.00;\n"
+       "  am;thinvol;Vwi-a-tz--;1000;3.00;\n"
+       "  other;x;twi-a-tz--;1;1.0;1.0\n")
+
+
+class LvmTests(unittest.TestCase):
+    def setUp(self):
+        self.host = FakeHost()
+        self.addCleanup(self.host.cleanup)
+        self.cfg = self.host.cfg
+
+    def test_parse_gives_groups_and_what_can_fill_up(self):
+        groups = hostinfo.parse_lvm(VGS, LVS)
+        self.assertEqual([g["name"] for g in groups], ["am", "vg2"])
+        am = groups[0]
+        self.assertEqual((am["size"], am["free"], am["pvs"], am["lvs"]), (22888000000000, 4806000000000, 1, 133))
+        self.assertEqual([(f["name"], f["kind"], f["data_pct"], f["meta_pct"]) for f in am["fill"]],
+                         [("thin", "thin-pool", 42.5, 7.25), ("snap1", "snapshot", 91.0, None)])      # plain volumes and thin volumes are not listed
+        self.assertEqual(groups[1]["fill"], [])
+
+    def test_parse_survives_garbage(self):
+        self.assertEqual(hostinfo.parse_lvm("garbage\n;;;;\nx;y;z;1;2\n", "a;b\n"), [])
+        self.assertEqual(hostinfo.parse_lvm(None, None), [])
+        self.assertEqual(len(hostinfo.parse_lvm("  am;1;1;1;1\n", "am;t;twi-a-tz--;1;oops;1\n")[0]["fill"]), 0)
+
+    def test_lvm_collect_asks_with_fixed_arguments_and_writes_the_file(self):
+        calls = []
+
+        def fake(argv):
+            calls.append(argv)
+            return VGS if argv[0] == "vgs" else LVS
+
+        host = FakeHost(run=fake)
+        self.addCleanup(host.cleanup)
+        data = hostinfo.lvm_collect(host.cfg, now=T0, which=lambda name, path=None: "/sbin/" + name)
+        self.assertEqual([c[0] for c in calls], ["vgs", "lvs"])
+        for argv in calls:
+            self.assertIn("--readonly", argv)             # no locks, nothing is changed
+        self.assertEqual(data["t"], T0)
+        with open(os.path.join(host.data, "lvm.json")) as handle:
+            self.assertEqual(json.load(handle)["vgs"][0]["name"], "am")
+        self.assertEqual(statmod.S_IMODE(os.stat(os.path.join(host.data, "lvm.json")).st_mode), 0o640)
+
+    def test_no_lvm_on_the_host_leaves_no_file_and_removes_an_old_one(self):
+        os.makedirs(self.host.data)
+        path = os.path.join(self.host.data, "lvm.json")
+        with open(path, "w") as handle:
+            handle.write("{}")
+        self.assertIsNone(hostinfo.lvm_collect(self.cfg, now=T0, which=lambda name, path=None: None))
+        self.assertFalse(os.path.exists(path))
+
+    def test_failing_vgs_is_a_visible_problem(self):
+        host = FakeHost(run=lambda argv: None)
+        self.addCleanup(host.cleanup)
+        data = hostinfo.lvm_collect(host.cfg, now=T0, which=lambda name, path=None: "/sbin/vgs")
+        self.assertEqual(data["vgs"], [])
+        self.assertIn("root", data["error"])
+        groups, problem = hostinfo.read_lvm(host.cfg, T0 + 10)
+        self.assertEqual(groups, [])
+        self.assertIn("vgs failed", problem)
+
+    def test_collect_picks_up_the_file_and_reports_a_stale_one(self):
+        host = FakeHost()
+        self.addCleanup(host.cleanup)
+        os.makedirs(host.data)
+        with open(os.path.join(host.data, "lvm.json"), "w") as handle:
+            json.dump({"t": T0 - 30, "vgs": hostinfo.parse_lvm(VGS, LVS)}, handle)
+        status = hostinfo.collect(host.cfg, now=T0)
+        self.assertEqual(status["storage"]["lvm"][0]["name"], "am")
+        self.assertEqual(status["errors"], [])
+        # the file is not renewed (the timer stopped): after 20 minutes it is not shown any more and the reason is said
+        host.uptime(5000)
+        later = hostinfo.collect(host.cfg, now=T0 + 1300)
+        self.assertNotIn("lvm", later["storage"])
+        self.assertTrue(any("lvm: the data is" in e for e in later["errors"]), later["errors"])
+        # and the problem stays visible between the five-minute readings of the storage
+        host.uptime(5060)
+        again = hostinfo.collect(host.cfg, now=T0 + 1360)
+        self.assertTrue(any("lvm: the data is" in e for e in again["errors"]), again["errors"])
+
+    def test_without_the_file_nothing_is_said(self):
+        status = hostinfo.collect(self.cfg, now=T0)
+        self.assertNotIn("lvm", status["storage"])
+        self.assertEqual(status["errors"], [])
+
+    def test_damaged_file_does_not_stop_the_sample(self):
+        os.makedirs(self.host.data)
+        for text in ("{not json", "[]", '{"t": 1, "vgs": 5}'):
+            with open(os.path.join(self.host.data, "lvm.json"), "w") as handle:
+                handle.write(text)
+            groups, problem = hostinfo.read_lvm(self.cfg, T0)
+            self.assertIsNone(groups)
+            self.assertTrue(problem.startswith("lvm:"), text)
+
+
+class FilesystemTests(unittest.TestCase):
+    MOUNTS = ("rootfs / rootfs rw 0 0\n"
+              "proc /proc proc rw 0 0\n"
+              "/dev/md126 / ext4 rw,relatime 0 0\n"
+              "/dev/md127 /boot ext4 rw 0 0\n"
+              "/dev/md125 /boot/efi vfat rw 0 0\n"
+              "/dev/mapper/am-solusvm /home/solusvm ext4 rw 0 0\n"
+              "/dev/mapper/am-solusvm /var/lib/bind ext4 rw 0 0\n"                  # the same device again: a bind mount
+              "/dev/sdb1 /mnt/with\\040space xfs rw 0 0\n"
+              "pool /pool zfs rw 0 0\n"
+              "/dev/sdc1 /gone ext4 rw 0 0\n")
+
+    def test_lists_local_filesystems_once_and_skips_the_rest(self):
+        sizes = {"/": (100, 40, 35), "/boot": (10, 8, 8), "/home/solusvm": (50, 20, 20), "/var/lib/bind": (50, 20, 20), "/mnt/with space": (10, 0, 0)}
+
+        def statvfs(path):
+            if path not in sizes:
+                raise OSError("no such mount")
+            b, f, a = sizes[path]
+            return FakeStatvfs(b, f, a, frsize=1000)
+
+        host = FakeHost()
+        self.addCleanup(host.cleanup)
+        host.cfg.statvfs = statvfs
+        host.write("mounts", self.MOUNTS)
+        fs = hostinfo.read_filesystems(host.cfg)
+        self.assertEqual([f["mount"] for f in fs], ["/", "/boot", "/home/solusvm", "/mnt/with space"])      # no vfat, zfs, proc, bind mount or unreadable
+        root = fs[0]
+        self.assertEqual((root["dev"], root["type"], root["size"], root["used"], root["avail"]), ("/dev/md126", "ext4", 100000, 60000, 35000))
+
+    def test_collect_includes_them_and_survives_a_missing_mounts_file(self):
+        host = FakeHost()
+        self.addCleanup(host.cleanup)
+        self.assertEqual(hostinfo.collect(host.cfg, now=T0)["storage"]["fs"], [])
+        host2 = FakeHost()
+        self.addCleanup(host2.cleanup)
+        host2.cfg.statvfs = lambda path: FakeStatvfs(1000, 500, 400)
+        host2.write("mounts", "/dev/a / ext4 rw 0 0\n")
+        self.assertEqual(hostinfo.collect(host2.cfg, now=T0)["storage"]["fs"][0]["mount"], "/")
+
+    def test_names_are_cleaned_and_the_list_is_limited(self):
+        host = FakeHost()
+        self.addCleanup(host.cleanup)
+        host.cfg.statvfs = lambda path: FakeStatvfs(10, 5, 5)
+        host.write("mounts", "".join("/dev/d%d /m%02d ext4 rw 0 0\n" % (i, i) for i in range(60)) + "/dev/x /ctl\\033x ext4 rw 0 0\n")
+        fs = hostinfo.read_filesystems(host.cfg)
+        self.assertEqual(len(fs), hostinfo.MAX_FILESYSTEMS)
+        self.assertTrue(all(ch >= " " for item in fs for ch in item["mount"]))
+
+
 class ServeTests(unittest.TestCase):
     def setUp(self):
         self.host = FakeHost()

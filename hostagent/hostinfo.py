@@ -1,11 +1,13 @@
 #!/usr/bin/python3
 """hostinfo - light health and VM load sampler for a KVM/libvirt hypervisor.
 
-Three commands, no dependencies beyond the Python 3.9 standard library:
+Four commands, no dependencies beyond the Python standard library (3.6 or newer):
 
   hostinfo collect [--dry-run]   one sample, run by a systemd timer (every 60 s). Reads /proc and the libvirt pid files, calls
                                  `zpool`/`zfs` at most every 5 minutes, writes status.json and appends one line to the day's
                                  samples file. No network, no listening socket, no input from anybody.
+  hostinfo lvm-collect           run as root by its own timer (every 5 minutes) on a host with LVM: asks `vgs` and `lvs` (they need
+                                 root) and writes lvm.json for `collect` to pick up. Fixed commands, no input from anybody.
   hostinfo serve [command]       what the SSH key of the monitoring system may run (as a forced command). The command comes from
                                  SSH_ORIGINAL_COMMAND and must be exactly one of: status | top 1h | top 6h | top 24h | top 7d | version.
   hostinfo version
@@ -21,12 +23,17 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 FORMAT = 1
 
 WINDOWS = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
 RETENTION_DAYS = 8
 STORAGE_REFRESH = 300          # seconds: the pools change slowly, they are asked every 5 minutes only
+LVM_FILE = "lvm.json"          # written by `lvm-collect` (root), read by `collect`
+LVM_MAX_AGE = 1200             # seconds: a lvm.json older than this is reported as a problem, not shown as if it were current
+FS_TYPES = ("ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "jfs", "reiserfs")   # local filesystems that are listed
+MAX_FILESYSTEMS = 30
+MAX_VGS = 20
 STAT_FIELDS = 8                # user nice system idle iowait irq softirq steal (guest time is already inside user and nice)
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -34,13 +41,14 @@ SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 class Config(object):
     """Where things are. The defaults are for a real host; the tests point them at a fake tree."""
 
-    def __init__(self, data_dir=None, proc=None, libvirt=None, interval=None, clk_tck=None, run=None):
+    def __init__(self, data_dir=None, proc=None, libvirt=None, interval=None, clk_tck=None, run=None, statvfs=None):
         self.data_dir = data_dir or os.environ.get("HOSTINFO_DIR", "/var/lib/hostinfo")
         self.proc = proc or os.environ.get("HOSTINFO_PROC", "/proc")
         self.libvirt = libvirt or os.environ.get("HOSTINFO_LIBVIRT", "/run/libvirt/qemu")
         self.interval = float(interval or os.environ.get("HOSTINFO_INTERVAL", "60"))
         self.clk_tck = clk_tck or os.sysconf("SC_CLK_TCK")
         self.run = run or run_command
+        self.statvfs = statvfs or os.statvfs
 
     @property
     def gap_limit(self):
@@ -192,6 +200,129 @@ def read_storage(cfg):
     return {"pools": parse_zfs(zpool, zfs), "zfs": True}
 
 
+def unescape_mount(text):
+    """/proc/mounts writes a space (and a few other characters) as \\040 and so on."""
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match.group(1), 8)), text)
+
+
+def read_filesystems(cfg):
+    """Size and use of the local filesystems (ext4, xfs, ...) that are mounted: the root filesystem filling up stops a host as surely as
+    a full pool. A device mounted twice (bind mounts) is listed once. Needs no privileges: statvfs works on any mount point."""
+    try:
+        lines = read_text(os.path.join(cfg.proc, "mounts")).splitlines()
+    except OSError:
+        return []
+    seen = set()
+    result = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3 or parts[2] not in FS_TYPES:
+            continue
+        device, mount = unescape_mount(parts[0]), unescape_mount(parts[1])
+        if device in seen:
+            continue
+        seen.add(device)
+        try:
+            info = cfg.statvfs(mount)
+        except OSError:
+            continue                               # not visible to this user or gone: not a reason to stop the sample
+        size = info.f_blocks * info.f_frsize
+        if size <= 0:
+            continue
+        result.append({"mount": clean_name(mount), "dev": clean_name(device), "type": parts[2], "size": size,
+                       "used": (info.f_blocks - info.f_bfree) * info.f_frsize, "avail": info.f_bavail * info.f_frsize})
+    result.sort(key=lambda item: item["mount"])
+    return result[:MAX_FILESYSTEMS]
+
+
+def to_int(text):
+    return int(float(text))
+
+
+def parse_lvm(vgs_out, lvs_out):
+    """`vgs --noheadings --nosuffix --units b --separator ; -o vg_name,vg_size,vg_free,pv_count,lv_count` and
+    `lvs ... -o vg_name,lv_name,lv_attr,lv_size,data_percent,metadata_percent` -> list of volume groups. `fill` lists what can run full
+    on its own: thin pools and old style snapshots (a snapshot that is full is lost)."""
+    groups = {}
+    order = []
+    for line in (vgs_out or "").splitlines():
+        parts = [part.strip() for part in line.strip().split(";")]
+        if len(parts) < 5 or not parts[0]:
+            continue
+        try:
+            group = {"name": clean_name(parts[0]), "size": to_int(parts[1]), "free": to_int(parts[2]),
+                     "pvs": to_int(parts[3]), "lvs": to_int(parts[4]), "fill": []}
+        except ValueError:
+            continue
+        groups[parts[0]] = group
+        order.append(group)
+    for line in (lvs_out or "").splitlines():
+        parts = [part.strip() for part in line.strip().split(";")]
+        if len(parts) < 6 or parts[0] not in groups or parts[2][:1] not in ("t", "s", "S"):
+            continue
+        try:
+            size = to_int(parts[3])
+            data = float(parts[4]) if parts[4] else None
+            meta = float(parts[5]) if parts[5] else None
+        except ValueError:
+            continue
+        if data is None and meta is None:
+            continue
+        groups[parts[0]]["fill"].append({"name": clean_name(parts[1]), "kind": "thin-pool" if parts[2][0] == "t" else "snapshot",
+                                         "size": size, "data_pct": data, "meta_pct": meta})
+    return order[:MAX_VGS]
+
+
+def lvm_collect(cfg, now=None, which=None):
+    """Runs as root (its own timer). Writes lvm.json; the unprivileged `collect` reads it. Nothing is written on a host without LVM."""
+    import shutil
+    now = time.time() if now is None else now
+    path = os.path.join(cfg.data_dir, LVM_FILE)
+    if (which or shutil.which)("vgs", path=SAFE_PATH) is None:
+        try:
+            os.remove(path)                        # LVM was removed from this host
+        except OSError:
+            pass
+        return None
+    common = ["--readonly", "--noheadings", "--nosuffix", "--units", "b", "--separator", ";"]
+    vgs = cfg.run(["vgs"] + common + ["-o", "vg_name,vg_size,vg_free,pv_count,lv_count"])
+    lvs = cfg.run(["lvs"] + common + ["-o", "vg_name,lv_name,lv_attr,lv_size,data_percent,metadata_percent"]) if vgs is not None else None
+    if vgs is None:
+        data = {"t": int(now), "vgs": [], "error": "vgs failed (it needs root)"}
+    else:
+        data = {"t": int(now), "vgs": parse_lvm(vgs, lvs)}
+        if lvs is None:
+            data["error"] = "lvs failed: thin pools and snapshots are not shown"
+    os.makedirs(cfg.data_dir, exist_ok=True)
+    write_atomic(path, json.dumps(data, separators=(",", ":")) + "\n", 0o640)
+    if os.geteuid() == 0:
+        try:
+            import grp
+            os.chown(path, -1, grp.getgrnam("hostinfo").gr_gid)     # so that the collector (user hostinfo) can read it
+        except (ImportError, KeyError, OSError):
+            pass
+    return data
+
+
+def read_lvm(cfg, now):
+    """(volume groups or None, problem or None) from the file that `lvm-collect` writes. No file: this host has no LVM (or the timer is
+    not installed), which is not a problem."""
+    try:
+        with open(os.path.join(cfg.data_dir, LVM_FILE), "r") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError):
+        return None, "lvm: lvm.json cannot be read"
+    if not isinstance(data, dict) or not isinstance(data.get("vgs"), list):
+        return None, "lvm: lvm.json is not valid"
+    age = now - data["t"] if isinstance(data.get("t"), (int, float)) else None
+    if age is None or age > LVM_MAX_AGE:
+        return None, "lvm: the data is %s old (is hostinfo-lvm.timer running?)" % ("more than %d min" % (LVM_MAX_AGE // 60) if age is None else "%d min" % (age // 60))
+    problem = ("lvm: %s" % clean_name(str(data["error"]))) if data.get("error") else None
+    return data["vgs"][:MAX_VGS], problem
+
+
 # ----------------------------------------------------------------------------------------------------------------- collect
 
 def load_state(cfg):
@@ -310,16 +441,25 @@ def collect(cfg, now=None, write=True):
 
     # storage: only asked every few minutes
     storage = None
+    storage_problems = []
     stored = state.get("storage")
     if isinstance(stored, dict) and isinstance(stored.get("t"), (int, float)) and 0 <= now - stored["t"] < STORAGE_REFRESH:
         storage = stored
+        storage_problems = [p for p in (state.get("storage_problems") or []) if isinstance(p, str)]
     else:
         try:
             storage = read_storage(cfg)
             storage["t"] = int(now)
+            storage["fs"] = read_filesystems(cfg)
+            groups, problem = read_lvm(cfg, now)
+            if groups is not None:
+                storage["lvm"] = groups
+            if problem:
+                storage_problems.append(problem)
         except Exception as error:         # a broken zfs must never stop the rest
             errors.append("storage: %s" % error)
             storage = stored if isinstance(stored, dict) else None
+    errors.extend(storage_problems)
 
     status = {
         "v": FORMAT, "host": clean_name(os.uname().nodename), "t": int(now), "interval": cfg.interval,
@@ -340,7 +480,7 @@ def collect(cfg, now=None, write=True):
         with open(sample_file(cfg, now), "a") as handle:
             handle.write(json.dumps(line, separators=(",", ":")) + "\n")
     write_atomic(os.path.join(cfg.data_dir, "status.json"), json.dumps(status, separators=(",", ":")) + "\n", 0o640)
-    new_state = {"t": now, "up": uptime, "stat": stat_now, "vms": vm_state, "storage": storage}
+    new_state = {"t": now, "up": uptime, "stat": stat_now, "vms": vm_state, "storage": storage, "storage_problems": storage_problems}
     write_atomic(os.path.join(cfg.data_dir, "state.json"), json.dumps(new_state, separators=(",", ":")), 0o600)
     prune(cfg, now)
     return status
@@ -429,10 +569,13 @@ def serve(cfg, command, out):
 
 
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("collect", "serve", "version"):
-        sys.stderr.write("usage: hostinfo collect [--dry-run] | serve [command] | version\n")
+    if len(argv) < 2 or argv[1] not in ("collect", "lvm-collect", "serve", "version"):
+        sys.stderr.write("usage: hostinfo collect [--dry-run] | lvm-collect | serve [command] | version\n")
         return 2
     cfg = Config()
+    if argv[1] == "lvm-collect":
+        lvm_collect(cfg)
+        return 0
     if argv[1] == "version":
         print(VERSION)
         return 0

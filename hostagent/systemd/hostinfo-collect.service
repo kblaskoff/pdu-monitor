@@ -19,7 +19,8 @@ NoNewPrivileges=yes
 CapabilityBoundingSet=
 ProtectSystem=strict
 ReadWritePaths=/var/lib/hostinfo
-ProtectHome=yes
+# read-only, not hidden: the filesystems mounted under /home (volumes of the VMs, backups) are measured too
+ProtectHome=read-only
 PrivateTmp=yes
 PrivateNetwork=yes
 ProtectKernelModules=yes

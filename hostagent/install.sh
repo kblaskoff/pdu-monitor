@@ -16,8 +16,9 @@ READER=hostinfo-ro
 [[ $EUID -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-  systemctl disable --now hostinfo-collect.timer 2>/dev/null || true
-  rm -f /etc/systemd/system/hostinfo-collect.service /etc/systemd/system/hostinfo-collect.timer "$PROGRAM"
+  systemctl disable --now hostinfo-collect.timer hostinfo-lvm.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/hostinfo-collect.service /etc/systemd/system/hostinfo-collect.timer \
+        /etc/systemd/system/hostinfo-lvm.service /etc/systemd/system/hostinfo-lvm.timer "$PROGRAM"
   systemctl daemon-reload
   userdel -r "$READER" 2>/dev/null || true
   userdel hostinfo 2>/dev/null || true
@@ -47,7 +48,8 @@ id -nG "$READER" | tr ' ' '\n' | grep -qx hostinfo || usermod -aG hostinfo "$REA
 
 install -o root -g root -m 0755 hostinfo.py "$PROGRAM"
 install -d -o hostinfo -g hostinfo -m 0750 "$DATA"
-install -o root -g root -m 0644 systemd/hostinfo-collect.service systemd/hostinfo-collect.timer /etc/systemd/system/
+install -o root -g root -m 0644 systemd/hostinfo-collect.service systemd/hostinfo-collect.timer \
+        systemd/hostinfo-lvm.service systemd/hostinfo-lvm.timer /etc/systemd/system/
 
 if [[ -n "$KEY" ]]; then
   [[ "$KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+|sk-ssh-ed25519@openssh.com)\  ]] || { echo "--key must be a public key line." >&2; exit 1; }
@@ -67,6 +69,14 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now hostinfo-collect.timer
+# LVM needs root to be asked: a second, separate timer does only that (every 5 minutes) and leaves one file for the collector
+if command -v vgs >/dev/null; then
+  systemctl enable --now hostinfo-lvm.timer
+  systemctl start hostinfo-lvm.service || echo "  NOTE: hostinfo-lvm.service failed: journalctl -u hostinfo-lvm.service"
+else
+  systemctl disable --now hostinfo-lvm.timer 2>/dev/null || true
+  rm -f "$DATA/lvm.json"
+fi
 
 echo
 echo "Checks:"
@@ -76,7 +86,10 @@ if runuser -u hostinfo -- "$PROGRAM" collect --dry-run >"$DRY" 2>&1; then
 import json, sys
 d = json.load(open(sys.argv[1]))
 print("  running VMs seen:", d["vms"]["count"])
-print("  zfs pools seen:  ", [p["name"] + " " + p["health"] for p in (d.get("storage") or {}).get("pools", [])] or "none")
+storage = d.get("storage") or {}
+print("  zfs pools seen:  ", [p["name"] + " " + p["health"] for p in storage.get("pools", [])] or "none")
+print("  lvm groups seen: ", [g["name"] for g in storage.get("lvm", [])] or "none")
+print("  filesystems seen:", [f["mount"] for f in storage.get("fs", [])] or "none")
 print("  problems:        ", d["errors"] or "none")
 PY
 else
