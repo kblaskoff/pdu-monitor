@@ -29,35 +29,17 @@ sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml
 It prints one line, `ssh-ed25519 AAAA… pdu-monitor` (the same as Settings → Hosts in the web interface). For a collector use
 `sudo -u pdu-collector pdu-collector pubkey -config /etc/pdu-collector/config.yaml` instead.
 
-**2. The files.** Copy this folder from the clone on the server:
-
-```
-scp -r /opt/pdu-monitor/hostagent root@HYPERVISOR:/root/
-```
-
-or let the hypervisor fetch only this folder from GitHub. With git (any version, also the old ones; `dnf install git`):
-
-```
-git clone --depth 1 --no-checkout https://github.com/kblaskoff/pdu-monitor.git /opt/pdu-monitor
-cd /opt/pdu-monitor
-git config core.sparseCheckout true
-echo "hostagent/" > .git/info/sparse-checkout
-git checkout main
-```
-
-Without git, the folder alone from the archive of `main`:
+**2. The files.** On the hypervisor, take this folder from the archive of `main` on GitHub (needs only `curl` and `tar`, no git):
 
 ```
 mkdir -p /opt/pdu-monitor
 curl -fsSL https://github.com/kblaskoff/pdu-monitor/archive/refs/heads/main.tar.gz | tar xz -C /opt/pdu-monitor --strip-components=1 pdu-monitor-main/hostagent
 ```
 
-The folder is then `/opt/pdu-monitor/hostagent` instead of `/root/hostagent` in the steps below.
-
 **3. Install.** On the hypervisor, as root:
 
 ```
-cd /root/hostagent
+cd /opt/pdu-monitor/hostagent
 ./install.sh --key "ssh-ed25519 AAAA… pdu-monitor" --from SERVER-IP
 ```
 
@@ -103,21 +85,22 @@ sudo -u pdumonitor ssh -i /var/lib/pdu-monitor/ssh_ed25519 -o UserKnownHostsFile
 ```
 KEY="$(sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml)"
 for h in HYPERVISOR1 HYPERVISOR2; do
-  scp -r /opt/pdu-monitor/hostagent root@$h:/root/ && ssh root@$h "cd /root/hostagent && ./install.sh --key '$KEY' --from SERVER-IP"
+  ssh root@$h "mkdir -p /opt/pdu-monitor && curl -fsSL https://github.com/kblaskoff/pdu-monitor/archive/refs/heads/main.tar.gz | tar xz -C /opt/pdu-monitor --strip-components=1 pdu-monitor-main/hostagent && cd /opt/pdu-monitor/hostagent && ./install.sh --key '$KEY' --from SERVER-IP"
 done
 ```
 
 ## Update
 
-Bring the new files to the hypervisor and run the script **without** `--key`. With the clone on the hypervisor:
+Take the files again (the same line as in step 2; it replaces them in place) and run the script **without** `--key`:
 
 ```
-cd /opt/pdu-monitor && git pull && cd hostagent && ./install.sh
+curl -fsSL https://github.com/kblaskoff/pdu-monitor/archive/refs/heads/main.tar.gz | tar xz -C /opt/pdu-monitor --strip-components=1 pdu-monitor-main/hostagent
+cd /opt/pdu-monitor/hostagent && ./install.sh
 /usr/local/sbin/hostinfo version
 ```
 
-With the archive: the `curl … | tar …` line again (it replaces the files), then `cd /opt/pdu-monitor/hostagent && ./install.sh`.
-With the copy from the server: `git pull` in the clone on the server, step 2 again, then `cd /root/hostagent && ./install.sh`.
+`/opt/pdu-monitor` is only where the files are installed from: the timer runs `/usr/local/sbin/hostinfo` and the data is in
+`/var/lib/hostinfo`, so nothing that is running reads the folder while it is replaced.
 
 Without `--key` the key line stays as it is. The collected history in `/var/lib/hostinfo` and changes made with `systemctl edit`
 (for example `User=root`) stay too. Nothing has to be done on the server: it reads the new version at its next poll.

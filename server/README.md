@@ -117,14 +117,11 @@ sudo chmod 640 /etc/pdu-monitor/config.yaml /etc/pdu-monitor/tls.key /etc/pdu-mo
 sudo systemctl restart pdu-monitor
 ```
 
-**7. Hypervisors.** The agent is in `/opt/pdu-monitor/hostagent`. Print the key of this server, copy the folder to each hypervisor and
-install it there with that key. The full steps (checks, confirming the host key, update, removal) are in
-[../hostagent/README.md](../hostagent/README.md):
+**7. Hypervisors.** Print the key of this server; each hypervisor takes the agent from the archive on GitHub and installs it with
+that key. The full steps (checks, confirming the host key, update, removal) are in [../hostagent/README.md](../hostagent/README.md):
 
 ```
 sudo -u pdumonitor pdumonitord pubkey -config /etc/pdu-monitor/config.yaml
-scp -r /opt/pdu-monitor/hostagent root@HYPERVISOR:/root/
-ssh root@HYPERVISOR '/root/hostagent/install.sh --key "THE KEY" --from SERVER-IP'
 ```
 
 **Update.** The configuration, the database and the keys stay as they are:
