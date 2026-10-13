@@ -35,7 +35,15 @@ It prints one line, `ssh-ed25519 AAAA… pdu-monitor` (the same as Settings → 
 scp -r /opt/pdu-monitor/hostagent root@HYPERVISOR:/root/
 ```
 
-or clone the repository on the hypervisor (`dnf install git`, `git clone https://github.com/kblaskoff/pdu-monitor.git /opt/pdu-monitor`).
+or let the hypervisor fetch only this folder from GitHub (about 300 KB; git also keeps the few files at the top of the repository):
+
+```
+dnf install git
+git clone --depth 1 --filter=blob:none --sparse https://github.com/kblaskoff/pdu-monitor.git /opt/pdu-monitor
+cd /opt/pdu-monitor && git sparse-checkout set hostagent
+```
+
+The folder is then `/opt/pdu-monitor/hostagent` instead of `/root/hostagent` in the steps below.
 
 **3. Install.** On the hypervisor, as root:
 
@@ -92,12 +100,14 @@ done
 
 ## Update
 
-Bring the new files to the hypervisor (`git pull` in the clone on the server, then step 2) and run the script **without** `--key`:
+Bring the new files to the hypervisor and run the script **without** `--key`. With the clone on the hypervisor:
 
 ```
-cd /root/hostagent && ./install.sh
+cd /opt/pdu-monitor && git pull && cd hostagent && ./install.sh
 /usr/local/sbin/hostinfo version
 ```
+
+With the copy from the server: `git pull` in the clone on the server, step 2 again, then `cd /root/hostagent && ./install.sh`.
 
 Without `--key` the key line stays as it is. The collected history in `/var/lib/hostinfo` and changes made with `systemctl edit`
 (for example `User=root`) stay too. Nothing has to be done on the server: it reads the new version at its next poll.
