@@ -261,7 +261,9 @@ async function viewOverview() {
       h('div', { class: 'stat' }, h('div', { class: 'label' }, 'Over limit'), h('div', { class: 'value ' + (t.over ? 'c-over' : 'c-ok') }, t.over)),
       h('a', { class: 'stat', href: '#/hosts' }, h('div', { class: 'label' }, 'Hypervisors'),
         h('div', { class: 'value' }, hs.online || 0, h('small', {}, ' of ' + hs.total + ' online'),
-          hs.degraded ? h('small', { class: 'c-over' }, '  · ' + hs.degraded + ' ZFS pool problem') : null)),
+          hs.degraded ? h('small', { class: 'c-over' }, '  · ' + hs.degraded + ' ZFS pool problem') : null,
+          hs.spaceOver ? h('small', { class: 'c-over' }, '  · ' + hs.spaceOver + ' low on disk space') : null,
+          hs.spaceWarn ? h('small', { class: 'c-warning' }, '  · ' + hs.spaceWarn + ' running short') : null)),
       h('div', { class: 'spacer' }),
       h('div', { class: 'stat' }, h('div', { class: 'label' }, 'Updated'), h('div', { class: 'value small', style: 'font-size:15px' }, clock(data.now))));
     const controls = h('div', { class: 'actionbar' },
@@ -469,8 +471,8 @@ async function viewHosts() {
         h('td', { class: 'num ' + idleClass(x.idlePct) }, x.idlePct == null ? '—' : Math.round(x.idlePct)), h('td', { class: 'num' }, x.load ? Math.round(x.load[1]) : '—'), h('td', { class: 'num' }, x.cores == null ? '—' : x.cores),
         h('td', { class: 'num' }, gib(x.memUsed)), h('td', { class: 'num' }, gib(memFree)), h('td', { class: 'num' }, gib(x.memTotal)),
         h('td', { class: 'num' }, st ? tib(st.total) : '—'),
-        h('td', { class: 'num ' + freeClass(freeFrac) }, st ? `${tib(st.avail)} (${Math.round(freeFrac * 100)}%)` : '—'),
-        h('td', {}, st ? (st.kind === 'lvm' ? h('span', { class: 'pill unknown' }, 'LVM') : (st.bad ? h('span', { class: 'pill over' }, st.bad) : h('span', { class: 'pill ok' }, 'ONLINE'))) : h('span', { class: 'muted' }, '—')),
+        h('td', { class: 'num ' + freeClass(x.spaceFree != null ? x.spaceFree : freeFrac) }, st ? `${tib(st.avail)} (${Math.round(freeFrac * 100)}%)` : '—'),
+        h('td', {}, st ? h('span', { class: 'pill ' + (x.space || 'unknown'), title: x.spaceWhy || '' }, st.kind === 'lvm' ? 'LVM' : (st.bad || 'ONLINE')) : h('span', { class: 'muted' }, '—')),
         h('td', { class: 'num' }, x.vms == null ? '—' : x.vms), h('td', { class: 'num' }, x.power ? fW(x.power.watts) : '—'),
         h('td', { class: 'num muted' }, x.ageSeconds == null ? (x.error ? h('span', { class: 'c-warning', title: x.error }, 'no data') : '—') : ago(x.ageSeconds)));
     });
@@ -502,7 +504,8 @@ async function viewHost(id) {
     const head = h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('div', { class: 'small' }, h('a', { href: '#/hosts' }, '← Hypervisors')),
       h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, hostDot(x), h('h1', {}, x.name),
         !x.enabled ? h('span', { class: 'pill unknown' }, 'disabled') : (!x.trusted ? h('span', { class: 'pill warning' }, 'key not confirmed') : (x.online ? h('span', { class: 'pill ok' }, 'online') : h('span', { class: 'pill over' }, x.stale ? 'data is old' : 'no answer'))),
-        st && st.bad ? h('span', { class: 'pill over' }, 'ZFS ' + st.bad) : null),
+        st && st.bad ? h('span', { class: 'pill over' }, 'ZFS ' + st.bad) : null,
+        x.space && x.space !== 'ok' && !(st && st.bad) ? h('span', { class: 'pill ' + x.space }, 'Disk space: ' + (x.spaceWhy || 'low')) : null),
       h('div', { class: 'muted small' }, (x.collector ? `via ${x.collector}` : `${x.address}:${x.port}`) + (x.ageSeconds != null ? ` · data ${ago(x.ageSeconds)} old` : '') + (x.agent ? ` · agent ${x.agent}` : '')),
       x.rackName ? h('div', { class: 'small' }, 'Rack ', h('a', { href: '#/rack/' + x.rackId }, x.rackName), x.outletKey ? ' · outlet ' + x.outletKey : '') : null));
     const warn = x.error && x.error !== 'disabled' ? h('div', { class: 'notice' + (x.ageSeconds == null ? ' bad' : '') }, '⚠ ' + x.error + (x.ageSeconds != null ? ' — showing the last data' : '')) : null;

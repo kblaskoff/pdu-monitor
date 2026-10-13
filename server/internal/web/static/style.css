@@ -170,3 +170,5 @@ tr.bad td { background: var(--over-bg); }
 h1 { margin-bottom: 12px; }
 dialog select, dialog input:not([type=checkbox]) { min-width: 0; width: 100%; }
 dialog label.field input[size] { width: 8em; }
+.stat .value small.c-over { color: var(--over); font-weight: 600; }
+.stat .value small.c-warning { color: var(--warn); font-weight: 600; }

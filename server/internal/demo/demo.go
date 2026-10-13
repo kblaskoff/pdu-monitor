@@ -218,7 +218,10 @@ func (r runner) Run(_ context.Context, h store.Host, command string) ([]byte, er
 		switch {
 		case lvmHosts[h.Name]:
 			size := int64(22888000000000)
-			free := int64(float64(size) * (0.12 + 0.2*seed(h.Name).next()))
+			free := int64(float64(size) * (0.22 + 0.1*seed(h.Name).next()))
+			if h.Name == "a47sf" { // short on space: yellow
+				free = size * 15 / 100
+			}
 			vg := hostinfo.VG{Name: "am", Size: size, Free: free, PVs: 1, LVs: len(vms) + 19}
 			if h.Name == "a45sf" { // a thin pool that is nearly full: what the screen must show in colour
 				one, two := 91.4, 12.0
@@ -229,6 +232,9 @@ func (r runner) Run(_ context.Context, h store.Host, command string) ([]byte, er
 			raw := int64(91534343012352)
 			alloc := int64(float64(raw) * (0.55 + 0.1*seed(h.Name).next()))
 			ut, ua := int64(float64(raw)*0.887), int64(float64(raw)*0.887)-int64(float64(alloc)*0.887)
+			if h.Name == "a53sf" { // a pool that is nearly full: yellow
+				ua = ut * 14 / 100
+			}
 			uu := ut - ua
 			s.Storage = &hostinfo.Storage{T: now.Unix(), Zfs: true, Pools: []hostinfo.Pool{{Name: "pool", Size: raw, Alloc: alloc, Free: raw - alloc, CapPct: int(100 * alloc / raw), Health: "ONLINE",
 				UsableUsed: &uu, UsableAvail: &ua, UsableTotal: &ut}}}

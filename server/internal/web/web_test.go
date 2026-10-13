@@ -489,6 +489,17 @@ func TestHostsWithLVMAndTheFilesystems(t *testing.T) {
 	if lvm["fs"] != nil {
 		t.Error("the list of all hosts does not carry the filesystems")
 	}
+	// the colour of the disk space: a thin pool that is 91% full is red, a healthy ZFS host is green, a DEGRADED pool is red
+	if lvm["space"] != "over" || !strings.Contains(lvm["spaceWhy"].(string), "thinpool") {
+		t.Errorf("a45sf: %v %v", lvm["space"], lvm["spaceWhy"])
+	}
+	if byName["a52sf"]["space"] != "ok" || byName["a54sf"]["space"] != "over" || byName["jbof5sf"]["space"] != nil {
+		t.Errorf("space: %v %v %v", byName["a52sf"]["space"], byName["a54sf"]["space"], byName["jbof5sf"]["space"])
+	}
+	_, ov := c.call("GET", "/api/overview", nil)
+	if n := obj(ov["hosts"])["spaceOver"]; n == nil || n.(float64) < 2 {
+		t.Errorf("the overview counts the hosts that are low on space: %v", obj(ov["hosts"]))
+	}
 	_, one := c.call("GET", "/api/hosts/"+itoa(int(lvm["id"].(float64))), nil)
 	fs := list(obj(one["host"])["fs"])
 	if len(fs) != 3 || obj(fs[0])["mount"] != "/" || obj(fs[2])["mount"] != "/home/solusvm" {

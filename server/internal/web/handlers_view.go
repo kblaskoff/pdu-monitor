@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -85,28 +86,33 @@ func (d *pduData) rackBrief(r store.Rack) rackBrief {
 // ---- hosts
 
 type hostBrief struct {
-	ID         int64                 `json:"id"`
-	Name       string                `json:"name"`
-	Address    string                `json:"address"`
-	Port       int                   `json:"port"`
-	RackID     *int64                `json:"rackId"`
-	RackName   string                `json:"rackName,omitempty"`
-	OutletKey  string                `json:"outletKey"`
-	Enabled    bool                  `json:"enabled"`
-	Trusted    bool                  `json:"trusted"`
-	Collector  string                `json:"collector,omitempty"`
-	Online     bool                  `json:"online"`
-	Stale      bool                  `json:"stale"`
-	AgeSeconds *int64                `json:"ageSeconds"`
-	Error      string                `json:"error,omitempty"`
-	Cores      *int                  `json:"cores"`
-	IdlePct    *float64              `json:"idlePct"`
-	Load       []float64             `json:"load,omitempty"`
-	MemUsed    *int64                `json:"memUsed"`
-	MemTotal   *int64                `json:"memTotal"`
-	MemArc     *int64                `json:"memArc"`
-	VMs        *int                  `json:"vms"`
-	Pools      []hostinfo.Pool       `json:"pools,omitempty"`
+	ID         int64           `json:"id"`
+	Name       string          `json:"name"`
+	Address    string          `json:"address"`
+	Port       int             `json:"port"`
+	RackID     *int64          `json:"rackId"`
+	RackName   string          `json:"rackName,omitempty"`
+	OutletKey  string          `json:"outletKey"`
+	Enabled    bool            `json:"enabled"`
+	Trusted    bool            `json:"trusted"`
+	Collector  string          `json:"collector,omitempty"`
+	Online     bool            `json:"online"`
+	Stale      bool            `json:"stale"`
+	AgeSeconds *int64          `json:"ageSeconds"`
+	Error      string          `json:"error,omitempty"`
+	Cores      *int            `json:"cores"`
+	IdlePct    *float64        `json:"idlePct"`
+	Load       []float64       `json:"load,omitempty"`
+	MemUsed    *int64          `json:"memUsed"`
+	MemTotal   *int64          `json:"memTotal"`
+	MemArc     *int64          `json:"memArc"`
+	VMs        *int            `json:"vms"`
+	Pools      []hostinfo.Pool `json:"pools,omitempty"`
+	// Space is how the disk space of the host stands: "ok", "warning" (a pool or volume group has less than 20% free, or a thin pool is
+	// 80% full) or "over" (less than 10% free, 90% full, or a ZFS pool that is not ONLINE). Empty when the host reports no pool or group.
+	Space      string                `json:"space,omitempty"`
+	SpaceFree  *float64              `json:"spaceFree,omitempty"` // the smallest free share of any pool or volume group
+	SpaceWhy   string                `json:"spaceWhy,omitempty"`  // what decided it, for a tooltip
 	LVM        []hostinfo.VG         `json:"lvm,omitempty"`
 	FS         []hostinfo.Filesystem `json:"fs,omitempty"`
 	Agent      string                `json:"agent,omitempty"`
@@ -114,6 +120,76 @@ type hostBrief struct {
 	Power      *powerView            `json:"power,omitempty"`
 	VMList     []hostinfo.VM         `json:"vmList,omitempty"`
 	OtherCores *float64              `json:"otherCores"`
+}
+
+// The thresholds of the disk space, the same for ZFS and LVM: yellow under 20% free, red under 10% (a thin pool or snapshot: 80% / 90% full).
+const (
+	spaceWarnFree = 0.20
+	spaceLowFree  = 0.10
+	fillWarnPct   = 80.0
+	fillLowPct    = 90.0
+)
+
+// setSpace judges the pools and volume groups of the host. The worst one decides, not the sum: one full pool is a problem even if
+// another has room.
+func (b *hostBrief) setSpace() {
+	level := 0
+	why := ""
+	var worst *float64
+	raise := func(l int, text string) {
+		if l > level || (l == level && l > 0 && why == "") {
+			level, why = l, text
+		}
+	}
+	free := func(name string, avail, total int64) {
+		if total <= 0 {
+			return
+		}
+		f := float64(avail) / float64(total)
+		if worst == nil || f < *worst {
+			worst = &f
+		}
+		text := fmt.Sprintf("%s: %.0f%% free", name, f*100)
+		switch {
+		case f < spaceLowFree:
+			raise(2, text)
+		case f < spaceWarnFree:
+			raise(1, text)
+		}
+	}
+	for _, p := range b.Pools {
+		if p.UsableTotal != nil && p.UsableAvail != nil {
+			free(p.Name, *p.UsableAvail, *p.UsableTotal)
+		} else {
+			free(p.Name, p.Free, p.Size)
+		}
+		if p.Health != "ONLINE" {
+			raise(2, p.Name+" is "+p.Health)
+		}
+	}
+	for _, g := range b.LVM {
+		free(g.Name, g.Free, g.Size)
+		for _, v := range g.Fill {
+			used := 0.0
+			for _, x := range []*float64{v.DataPct, v.MetaPct} {
+				if x != nil && *x > used {
+					used = *x
+				}
+			}
+			text := fmt.Sprintf("%s %s: %.0f%% full", v.Kind, v.Name, used)
+			switch {
+			case used >= fillLowPct:
+				raise(2, text)
+			case used >= fillWarnPct:
+				raise(1, text)
+			}
+		}
+	}
+	if len(b.Pools) == 0 && len(b.LVM) == 0 {
+		return
+	}
+	b.Space = []string{"ok", "warning", "over"}[level]
+	b.SpaceFree, b.SpaceWhy = worst, why
 }
 
 // powerView is what the PDUs say about the cables of a host.
@@ -185,6 +261,7 @@ func (s *Server) hostBriefs(ctx context.Context, d *pduData, full bool) ([]hostB
 			b.VMs = &n
 			if stat.Storage != nil {
 				b.Pools, b.LVM = stat.Storage.Pools, stat.Storage.LVM
+				b.setSpace()
 				if full {
 					b.FS = stat.Storage.FS // only the page of one host needs the list of filesystems
 				}
@@ -273,6 +350,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, _ *auth.
 				hs["degraded"]++
 				break
 			}
+		}
+		switch h.Space {
+		case "over":
+			hs["spaceOver"]++
+		case "warning":
+			hs["spaceWarn"]++
 		}
 	}
 	writeJSON(w, 200, map[string]any{"now": s.Now().Unix(), "totals": totals, "racks": racks, "hosts": hs})
