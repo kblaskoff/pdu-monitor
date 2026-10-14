@@ -316,3 +316,33 @@ func TestCancelledDuringThePauseSwitchesThePortsBackOn(t *testing.T) {
 		t.Error("a server must not be left without power")
 	}
 }
+
+// An outlet can be named "200U13" or "200U13 a42sf": the id alone identifies the server, so the two PDUs of a server are one line
+// whatever follows the id, and a host is joined by the id.
+func TestOutletNamedWithTheIdAndTheMachineName(t *testing.T) {
+	for name, want := range map[string]string{
+		"200U13": "200u13", "200U13 a42sf": "200u13", "  200U13   a42sf ": "200u13", "N200U43 uplink-core": "n200u43", "10FU12 a44sf": "10fu12",
+		"200U12-1 second": "200u12-1", "200U 31": "200u31", "db 200U13": "db200u13", "Outlet main": "outletmain", "a42sf 200U13": "a42sf200u13",
+	} {
+		if got := pdu.ServerKey(name); got != want {
+			t.Errorf("ServerKey(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if pdu.ServerKind("N200U43 router-uplink") != "network" || pdu.ServerKind("200U13 a42sf") != "server" || pdu.ServerKind("N100U43") != "network" {
+		t.Error("kind")
+	}
+	o := func(n int, name string) pdu.Outlet { return pdu.Outlet{Number: n, Name: name} }
+	servers := pdu.Servers([]pdu.State{
+		state(1, "P200A", 24, nil, nil, o(1, "200U13 a42sf"), o(2, "Outlet_2")),
+		state(2, "P200B", 24, nil, nil, o(1, "200U13"), o(2, "N200U43 sw1")), // the same server, named in the old way on the second PDU
+	})
+	if len(servers) != 2 {
+		t.Fatalf("%+v", servers)
+	}
+	if servers[0].Key != "200u13" || len(servers[0].Ports) != 2 || servers[0].Name != "200U13 a42sf" {
+		t.Errorf("%+v", servers[0])
+	}
+	if servers[1].Key != "n200u43" || servers[1].Kind != "network" {
+		t.Errorf("%+v", servers[1])
+	}
+}

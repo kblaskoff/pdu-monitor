@@ -37,6 +37,7 @@ import (
 	"github.com/kblaskoff/pdu-monitor/server/internal/config"
 	"github.com/kblaskoff/pdu-monitor/server/internal/demo"
 	"github.com/kblaskoff/pdu-monitor/server/internal/hostinfo"
+	"github.com/kblaskoff/pdu-monitor/server/internal/servman"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
 	"github.com/kblaskoff/pdu-monitor/server/internal/web"
 )
@@ -163,12 +164,14 @@ func serve(args []string) error {
 		runner  hostinfo.Runner
 		keys    web.KeyFetcher
 		ssh     *hostinfo.SSHClient
+		demoLab *demo.Lab
 	)
 	if *demoMode {
 		lab, err := demo.Seed(ctx, st)
 		if err != nil {
 			return err
 		}
+		demoLab = lab
 		authn, factory, runner = demoAuth{}, lab.Factory, lab.Runner()
 		keys = demo.Keys{}
 		logger.Print("DEMO MODE: sample data only; log in as demo / demo (admin), operator / operator, viewer / viewer")
@@ -198,6 +201,18 @@ func serve(args []string) error {
 	poller.Log = func(s string) { logger.Print(s) }
 	application := app.New(st, poller, factory)
 	application.Log = func(s string) { logger.Print(s) }
+	if *demoMode {
+		application.Servman = demoLab.Servman()
+	} else if scfg, ok, err := cfg.ServmanConfig(); err != nil {
+		return fmt.Errorf("servman: %w", err)
+	} else if ok {
+		client, err := servman.New(scfg)
+		if err != nil {
+			return err
+		}
+		application.Servman = client
+		logger.Print("servman: the outlets of the PDUs are named after " + scfg.URL + " (intervals: Settings)")
+	}
 	sessions := auth.NewSessions(time.Duration(cfg.Session.IdleMinutes)*time.Minute, time.Duration(cfg.Session.MaxHours)*time.Hour)
 	srv := web.New(application, st, authn, sessions)
 	srv.Keys = keys

@@ -105,6 +105,20 @@ func (s *Simulated) SetOutlet(ctx context.Context, n int, on bool) error {
 	return nil
 }
 
+// SetOutletName gives an outlet a name, like the real ones do.
+func (s *Simulated) SetOutletName(ctx context.Context, n int, name string) error {
+	if err := ValidOutletName(name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.states[n]; !ok {
+		return fmt.Errorf("no outlet %d", n)
+	}
+	s.names[n] = name
+	return nil
+}
+
 func (s *Simulated) OutletState(ctx context.Context, n int) (*bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

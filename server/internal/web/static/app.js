@@ -620,13 +620,14 @@ const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return N
 
 async function viewAdmin(tab) {
   if (!isAdmin()) { mount('', h('div', { class: 'card' }, 'Only administrators can change the settings.')); return; }
-  const tabs = [['racks', 'Racks'], ['pdus', 'PDUs'], ['hosts', 'Hosts'], ['settings', 'Settings'], ['import', 'Import'], ['audit', 'Log']];
+  const tabs = [['racks', 'Racks'], ['pdus', 'PDUs'], ['hosts', 'Hosts'], ['names', 'Names'], ['settings', 'Settings'], ['import', 'Import'], ['audit', 'Log']];
   if (!tabs.some((t) => t[0] === tab)) tab = 'racks';
   const nav = h('div', { class: 'tabs' }, tabs.map(([k, v]) => h('a', { href: '#/admin/' + k, class: k === tab ? 'on' : '' }, v)));
   const body = h('div');
   mount('admin', h('div', {}, h('h1', {}, 'Settings'), nav, body));
   const reload = () => viewAdmin(tab).catch((e) => failed(e));
   if (tab === 'audit') return adminAudit(body);
+  if (tab === 'names') return adminNames(body);
   if (tab === 'import') return adminImport(body, reload);
   const cfg = await api('GET', '/api/admin/config');
   if (tab === 'racks') adminRacks(body, cfg, reload);
@@ -755,11 +756,15 @@ function adminSettings(body, cfg, reload) {
   const s = cfg.settings;
   const inp = (v) => h('input', { value: String(v), inputmode: 'numeric', size: 6 });
   const poll = inp(s.pollSeconds), hostPoll = inp(s.hostPollSeconds), warn = inp(s.warnPercent), delay = inp(s.restartDelaySeconds), keep = inp(s.sampleRetentionDays);
+  const smPoll = inp(s.servmanPollMinutes), smSync = inp(s.servmanSyncMinutes);
+  const smFormat = h('select', {}, h('option', { value: 'ccid' }, 'Rack unit id only: 200U13'), h('option', { value: 'ccid_name' }, 'Id and machine name: 200U13 a42sf'));
+  smFormat.value = s.servmanNameFormat || 'ccid';
   const saved = h('span', { class: 'c-ok small' });
   const save = h('button', { class: 'primary', onclick: async () => {
     saved.textContent = '';
     try {
-      const r = await api('PUT', '/api/admin/settings', { pollSeconds: +poll.value, hostPollSeconds: +hostPoll.value, warnPercent: +warn.value, restartDelaySeconds: +delay.value, sampleRetentionDays: +keep.value });
+      const r = await api('PUT', '/api/admin/settings', { pollSeconds: +poll.value, hostPollSeconds: +hostPoll.value, warnPercent: +warn.value, restartDelaySeconds: +delay.value, sampleRetentionDays: +keep.value,
+        servmanPollMinutes: +smPoll.value, servmanSyncMinutes: +smSync.value, servmanNameFormat: smFormat.value });
       S.settings = { warnPercent: r.warnPercent, restartDelaySeconds: r.restartDelaySeconds, pollSeconds: r.pollSeconds };
       saved.textContent = 'Saved.';
     } catch (e) { saved.className = 'error small'; saved.textContent = e.message; }
@@ -767,7 +772,80 @@ function adminSettings(body, cfg, reload) {
   body.append(h('div', { class: 'card', style: 'max-width:640px' },
     field('PDU reading (s)', poll, 'How often the PDUs are asked.'), field('Host reading (s)', hostPoll, 'How often the agents of the hosts are read.'),
     field('Warn at (%)', warn, 'Of the limit; above it a rack or PDU is shown as high.'), field('Restart pause (s)', delay, 'Between switching off and on again (5–10 is usual).'),
-    field('Keep history (days)', keep), h('div', { class: 'actionbar' }, save, saved)));
+    field('Keep history (days)', keep),
+    h('h3', { style: 'margin:18px 0 4px' }, 'Names of the outlets (from servman)'),
+    field('Ask servman every (min)', smPoll, 'Compares servman with the PDUs and shows the plan under Names. 0 = never by itself.'),
+    field('Write to the PDUs every (min)', smSync, 'Writes the planned names to the PDUs by itself (at most 100 outlets a round). 0 = only when you press the button under Names.'),
+    field('Outlet name', smFormat, 'What an outlet is called. Both forms join the two PDUs of a server and the host by the rack unit id.'),
+    h('div', { class: 'actionbar' }, save, saved)));
+}
+
+
+// ---- names of the outlets: servman says which server is on which outlet, the PDUs are named after it
+async function adminNames(body) {
+  let st = await api('GET', '/api/admin/servman');
+  let busy = false;
+  const when = (iso) => (iso ? datetime(iso) : 'never');
+  async function refreshNow() {
+    busy = true; draw();
+    try { st = await api('POST', '/api/admin/servman/refresh', {}); } catch (e) { st = { ...st, planError: e.message }; }
+    busy = false; draw();
+  }
+  async function write(sel, what, count) {
+    const list = h('ul', {}, (sel.changes || []).slice(0, 10).map((c) => h('li', {}, `${c.pdu} outlet ${c.outlet}: ${c.current || '—'} → ${c.desired}`)), (sel.changes || []).length > 10 ? h('li', { class: 'muted' }, `… and ${sel.changes.length - 10} more`) : null);
+    const ok = await confirmDialog(`Write ${count} outlet name${count === 1 ? '' : 's'}?`, h('div', {}, h('div', {}, what), list,
+      h('div', { class: 'effect' }, 'The names are written to the PDUs (SNMP). The PDUs are read again afterwards and the names are compared with what was meant; every writing is in the log.')), 'Write', false);
+    if (!ok) return;
+    try { st = await api('POST', '/api/admin/servman/apply', { all: !!sel.all, pdu: sel.pdu || '', outlet: sel.outlet || 0, confirm: true }); } catch (e) { setBanner({ title: 'Not written', error: e.message, running: false }); return; }
+    draw();
+  }
+  function draw() {
+    if (dialogOpen()) return;
+    if (!st.configured) {
+      body.replaceChildren(h('div', { class: 'card', style: 'max-width:720px' }, h('h2', {}, 'Servman is not configured'),
+        h('p', { class: 'muted' }, 'The outlets of the PDUs are named after the servers of servman (200U13). Add the connection to config.yaml on the server and restart it:'),
+        h('pre', { class: 'key' }, 'servman:\n  url: "https://replace_me.example.com"\n  token_file: /etc/pdu-monitor/servman-token   # one line, chmod 640 root:pdumonitor\n  ca_file: /etc/pdu-monitor/servman-ca.pem     # or: insecure_skip_verify: true'),
+        h('p', { class: 'note' }, 'How often it is asked and written, and the form of the names, are under Settings.')));
+      return;
+    }
+    const plan = st.plan;
+    const changes = plan ? plan.changes : [];
+    const ready = changes.filter((c) => !c.blocked);
+    const groups = {};
+    for (const c of changes) (groups[c.pdu] = groups[c.pdu] || []).push(c);
+    const head = h('div', { class: 'card', style: 'margin-bottom:14px' },
+      h('div', { style: 'display:flex;gap:14px;align-items:center;flex-wrap:wrap' },
+        h('div', {}, h('div', {}, `Compared: ${when(st.planAt)}`), h('div', { class: 'muted small' }, st.syncAt ? `Last writing: ${when(st.syncAt)} — ${st.syncResult || ''}` : 'Nothing written yet')),
+        h('div', { class: 'spacer' }),
+        st.writing ? h('div', { style: 'display:flex;gap:8px;align-items:center' }, h('div', { class: 'spinner' }), 'Writing…') : null,
+        h('button', { disabled: busy || st.writing, onclick: refreshNow }, busy ? 'Asking servman…' : 'Compare now'),
+        h('button', { class: 'primary', disabled: busy || st.writing || !ready.length, onclick: () => write({ all: true, changes: ready }, 'Everything in the plan:', ready.length) }, `Write all (${ready.length})`)),
+      st.planError ? h('p', { class: 'error', style: 'margin:10px 0 0' }, st.planError) : null,
+      st.resultError ? h('p', { class: 'error', style: 'margin:10px 0 0' }, st.resultError) : null,
+      plan ? h('p', { class: 'note' }, `${plan.devices} devices of servman have cables · ${plan.unchanged} outlets already have the right name · ${changes.length} to change · name form: ${plan.format === 'ccid_name' ? 'id and machine name' : 'rack unit id'}`) : null);
+    const failed = st.result && st.result.failed && st.result.failed.length ? h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', {}, 'Not written'),
+      h('ul', {}, st.result.failed.map((f) => h('li', {}, h('span', { class: 'error' }, `${f.pdu} outlet ${f.outlet} → ${f.desired}: `), f.error)))) : null;
+    const table = changes.length ? h('div', { class: 'tablewrap', style: 'margin-bottom:14px' }, h('table', {}, h('thead', {}, h('tr', {}, ['PDU', 'Outlet', 'Now', 'Will be', 'Server', ''].map((t) => h('th', {}, t)), h('th'))),
+      h('tbody', {}, Object.keys(groups).sort().flatMap((pduName) => {
+        const g = groups[pduName], rdy = g.filter((c) => !c.blocked);
+        return [h('tr', { class: 'group-row' }, h('td', { colspan: 6, class: 'name' }, `${pduName} · ${g.length} to change`),
+          h('td', { class: 'num' }, h('button', { class: 'small', disabled: busy || st.writing || !rdy.length, onclick: () => write({ pdu: pduName, changes: rdy }, `All planned names of ${pduName}:`, rdy.length) }, `Write ${rdy.length}`))),
+          ...g.map((c) => h('tr', { class: c.blocked ? 'dim' : '' }, h('td', {}, c.pdu), h('td', { class: 'num' }, c.outlet), h('td', { class: 'muted' }, c.current || '—'), h('td', { class: 'name' }, c.desired),
+            h('td', { class: 'muted' }, c.host ? c.host : ''),
+            h('td', {}, h('span', { class: 'pill ' + (c.kind === 'fill' ? 'ok' : 'warning'), title: c.kind === 'fill' ? 'the outlet still has the default name' : 'replaces another name' }, c.kind === 'fill' ? 'new' : 'rename'), c.blocked ? h('span', { class: 'c-over small' }, '  ' + c.blocked) : null, c.note ? h('span', { class: 'muted small' }, '  ' + c.note) : null),
+            h('td', { class: 'num' }, h('button', { class: 'small', disabled: busy || st.writing || !!c.blocked, onclick: () => write({ pdu: c.pdu, outlet: c.outlet, changes: [c] }, 'One outlet:', 1) }, 'Write'))))];
+      })))) : (plan ? h('p', { class: 'c-ok' }, 'The names on the PDUs match servman: nothing to write.') : h('p', { class: 'muted' }, 'Press "Compare now" to see what would change.'));
+    const warnings = plan && plan.warnings.length ? h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', {}, `Things that do not fit (${plan.warnings.length}): nothing is written for them`),
+      h('ul', {}, plan.warnings.slice(0, 50).map((w) => h('li', {}, w.text))), plan.warnings.length > 50 ? h('p', { class: 'muted small' }, `… and ${plan.warnings.length - 50} more`) : null) : null;
+    const unmapped = plan && plan.unmapped.length ? h('details', { class: 'card' }, h('summary', {}, `${plan.unmapped.length} outlets have a name that servman does not know (never changed)`),
+      h('p', { class: 'muted small' }, plan.unmapped.slice(0, 200).map((u) => `${u.pdu} #${u.outlet}: ${u.name}`).join('   ·   '))) : null;
+    body.replaceChildren(...[head, failed, table, warnings, unmapped].filter(Boolean));
+  }
+  draw();
+  // while it writes the page follows the progress
+  stopPolling();
+  S.refresh = async () => { try { st = await api('GET', '/api/admin/servman'); draw(); } catch (e) { /* the next round */ } };
+  S.timer = setInterval(() => { if (!document.hidden && !dialogOpen()) S.refresh(); }, 3000);
 }
 
 function adminImport(body, reload) {

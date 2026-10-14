@@ -285,7 +285,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request, _ *au
 }
 
 func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, sess *auth.Session) {
-	var st store.Settings
+	st, _ := s.Store.Settings(r.Context()) // what the request does not mention stays as it is (an older page does not know the newer settings)
 	if !readJSON(w, r, &st) {
 		return
 	}

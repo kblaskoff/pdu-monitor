@@ -384,3 +384,20 @@ func TestCollectedHosts(t *testing.T) {
 		t.Error("a direct host without an address was saved")
 	}
 }
+
+func TestServmanSettings(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	d := store.DefaultSettings()
+	if d.ServmanPollMinutes != 60 || d.ServmanSyncMinutes != 0 || d.ServmanNameFormat != store.NameCCID {
+		t.Fatalf("defaults: %+v", d)
+	}
+	saved, _ := s.SaveSettings(ctx, store.Settings{ServmanPollMinutes: 0, ServmanSyncMinutes: 30, ServmanNameFormat: store.NameCCIDName})
+	if saved.ServmanPollMinutes != 0 || saved.ServmanSyncMinutes != 30 || saved.ServmanNameFormat != store.NameCCIDName {
+		t.Fatalf("0 means off and must be kept: %+v", saved)
+	}
+	bad, _ := s.SaveSettings(ctx, store.Settings{ServmanPollMinutes: -5, ServmanSyncMinutes: 999999, ServmanNameFormat: "anything"})
+	if bad.ServmanPollMinutes != 60 || bad.ServmanSyncMinutes != 0 || bad.ServmanNameFormat != store.NameCCID {
+		t.Fatalf("out of range values fall back: %+v", bad)
+	}
+}

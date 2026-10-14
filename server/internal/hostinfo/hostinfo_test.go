@@ -292,7 +292,7 @@ func TestParseStatusCleansAndLimits(t *testing.T) {
 }
 
 // What a host with LVM and no ZFS says (agent 0.2.0): the volume group, a nearly full thin pool, the mounted filesystems.
-const lvmStatusJSON = `{"v":1,"host":"kvmsfc5","t":1760000000,"interval":60,"cpu":{"cores":128,"idle_pct":70.6,"iowait_pct":0.1,"load":[33.9,30.8,30.8]},
+const lvmStatusJSON = `{"v":1,"host":"lvmhost1","t":1760000000,"interval":60,"cpu":{"cores":128,"idle_pct":70.6,"iowait_pct":0.1,"load":[33.9,30.8,30.8]},
 "mem":{"total":1068804202496,"available":386284560384,"used":682519642112,"swap_used":0},
 "storage":{"pools":[],"zfs":false,"t":1760000000,
 "lvm":[{"name":"am","size":22888000000000,"free":4806000000000,"pvs":1,"lvs":133,"fill":[{"name":"thin","kind":"thin-pool","size":1000000000000,"data_pct":91.5,"meta_pct":null}]}],

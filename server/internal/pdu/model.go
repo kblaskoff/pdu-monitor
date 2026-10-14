@@ -2,6 +2,7 @@
 package pdu
 
 import (
+	"regexp"
 	"strings"
 	"time"
 )
@@ -184,11 +185,30 @@ func IsDefaultOutletName(name string) bool {
 
 // ServerKey is what finds the outlets of one server on two PDUs: case-insensitive, without spaces.
 func ServerKey(name string) string {
+	if ccid, ok := ccidToken(name); ok {
+		return strings.ToLower(ccid)
+	}
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", ""))
+}
+
+var ccidPattern = regexp.MustCompile(`^(?i)N?[0-9]{1,4}[A-Z]?U[0-9]{1,3}(-[0-9]+)?$`)
+
+// ccidToken: an outlet can be named "200U13" or "200U13 a42sf" (the id of the rack unit, then the name of the machine). When the name
+// starts with such an id followed by more words, the id alone is what identifies the server: both PDUs of one server must be one line
+// whatever follows, and the host is joined by the id.
+func ccidToken(name string) (string, bool) {
+	fields := strings.Fields(name)
+	if len(fields) > 1 && ccidPattern.MatchString(fields[0]) {
+		return fields[0], true
+	}
+	return "", false
 }
 
 // ServerKind: network gear is named with an N in front of the rack unit: "N200U43", "N10FU30" (N, the rack, U, the unit).
 func ServerKind(name string) string {
+	if ccid, ok := ccidToken(name); ok {
+		name = ccid
+	}
 	upper := strings.ToUpper(strings.TrimSpace(name))
 	if !strings.HasPrefix(upper, "N") || len(upper) < 4 {
 		return "server"

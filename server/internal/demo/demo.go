@@ -199,7 +199,7 @@ func (r runner) Run(_ context.Context, h store.Host, command string) ([]byte, er
 		for _, v := range vms {
 			vmMem += v.rss
 		}
-		lvmHosts := map[string]bool{"a41sf": true, "a45sf": true, "a47sf": true} // hosts with LVM instead of ZFS, like the real kvmsfc5
+		lvmHosts := map[string]bool{"a41sf": true, "a45sf": true, "a47sf": true} // hosts with LVM instead of ZFS, like a real LVM hypervisor
 		arc := int64(80 << 30)
 		if lvmHosts[h.Name] {
 			arc = 0 // no ZFS, no ARC

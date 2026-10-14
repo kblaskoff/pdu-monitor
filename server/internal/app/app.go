@@ -17,6 +17,7 @@ import (
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/hostinfo"
 	"github.com/kblaskoff/pdu-monitor/server/internal/pdu"
+	"github.com/kblaskoff/pdu-monitor/server/internal/servman"
 	"github.com/kblaskoff/pdu-monitor/server/internal/snmp"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
 )
@@ -66,6 +67,21 @@ type App struct {
 	Now     func() time.Time
 	// Sleep is used in the pause of a restart (replaced in tests).
 	Sleep func(ctx context.Context, d time.Duration) error
+
+	// Servman tells which device is plugged into which outlet; nil when it is not configured.
+	Servman servman.Source
+	// ServmanSweep is how often the settings are looked at to see whether servman is due (30 s; shorter in tests).
+	ServmanSweep time.Duration
+
+	snMu         sync.Mutex // the plan and the state of the writing of names
+	lastPlan     *servman.Plan
+	planAt       *time.Time
+	planErr      string
+	syncAt       *time.Time
+	syncRes      string
+	writing      bool
+	lastApply    *NameResult
+	lastApplyErr string
 
 	mu       sync.Mutex
 	readings map[int64]Reading
@@ -194,6 +210,9 @@ func (a *App) pollOne(ctx context.Context, p store.PDU) Reading {
 
 // Run polls the PDUs, the hosts and prunes the history until the context ends.
 func (a *App) Run(ctx context.Context) {
+	if a.Servman != nil {
+		go a.servmanLoop(ctx)
+	}
 	if a.Hosts != nil {
 		go a.Hosts.Run(ctx, func() time.Duration {
 			st, _ := a.Store.Settings(ctx)

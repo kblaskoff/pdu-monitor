@@ -81,3 +81,36 @@ func TestCollectors(t *testing.T) {
 		}
 	}
 }
+
+func TestServmanSection(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token")
+	_ = os.WriteFile(tokenFile, []byte("  smtk_secret_value \n"), 0o600)
+	c, err := Load(write(t, "allow_plain_http: true\nservman:\n  url: https://servman.example.com/\n  token_file: "+tokenFile+"\n  insecure_skip_verify: true\n  sources: [servers, netswitches]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, ok, err := c.ServmanConfig()
+	if err != nil || !ok || sc.Token != "smtk_secret_value" || sc.URL != "https://servman.example.com/" || !sc.InsecureSkipVerify || len(sc.Sources) != 2 {
+		t.Fatalf("%+v %v %v", sc, ok, err)
+	}
+	// without the section nothing is configured, and nothing is read
+	c, _ = Load(write(t, "allow_plain_http: true\n"))
+	if _, ok, err := c.ServmanConfig(); ok || err != nil {
+		t.Errorf("%v %v", ok, err)
+	}
+	// a token file that is not there is an error at the start, not a silent "off"
+	c, _ = Load(write(t, "allow_plain_http: true\nservman:\n  url: https://servman.example.com\n  token_file: "+filepath.Join(dir, "missing")+"\n"))
+	if _, ok, err := c.ServmanConfig(); !ok || err == nil {
+		t.Errorf("missing token file: %v %v", ok, err)
+	}
+	for name, text := range map[string]string{
+		"no token file":  "allow_plain_http: true\nservman:\n  url: https://servman.example.com\n",
+		"unknown source": "allow_plain_http: true\nservman:\n  url: https://servman.example.com\n  token_file: /t\n  sources: [clients]\n",
+		"a typo":         "allow_plain_http: true\nservman:\n  url: https://servman.example.com\n  token_file: /t\n  tokenfile: /x\n",
+	} {
+		if _, err := Load(write(t, text)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

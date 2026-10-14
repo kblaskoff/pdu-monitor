@@ -183,6 +183,45 @@ and its power outlet name with **Edit** to join it with its power. The server ne
   follows redirects, so the token cannot be sent anywhere else). For your own CA set `ca_file`.
 * A name that the server reads itself (or another collector reads) is refused. Wrong tokens lock the sender's address for a while.
 
+## Names of the outlets (servman)
+
+The servers are joined with their power by the **name of the outlet** (`200U13`: rack 200, unit 13). Servman, the inventory, knows which
+server is plugged into which outlet of which PDU; `pdumonitord` compares that with the names on the PDUs and can write the right names
+to them. The names are then read back from the PDUs like any other name, so the rest of the system needs nothing more.
+
+**Connect it** (once, in `/etc/pdu-monitor/config.yaml`; leave the section out to turn it off):
+
+```yaml
+servman:
+  url: "https://replace_me.example.com"
+  token_file: /etc/pdu-monitor/servman-token     # the token of the API, one line
+  ca_file: /etc/pdu-monitor/servman-ca.pem       # the CA of its certificate; or, if you cannot get it: insecure_skip_verify: true
+  # sources: [servers]                           # add netswitches to name the network devices (N200U43) from their list too
+```
+
+The token is a secret: `sudo install -m 640 -o root -g pdumonitor /dev/stdin /etc/pdu-monitor/servman-token` and paste it, or write the
+file and `chmod 640`. It is never in the repository, in the configuration file or in the log. Restart the service.
+
+**Look at it** under *Settings → Names*: *Compare now* asks servman and shows, per PDU, which outlets would get which name. Nothing is
+written by that. *new* means the outlet still has the default name (`Outlet_7`), *rename* that another name is replaced. Things that do not
+fit are listed and left alone: two servers on one outlet (a mistake in servman), a PDU that servman has but this system does not, an outlet
+number that the PDU does not have, a PDU that was not read. Outlets that have a name of their own that servman does not know are only listed.
+
+**Write it** with *Write all*, *Write 3* (one PDU) or *Write* (one outlet). Start with one outlet and look at the PDU. Every writing needs
+a confirmation, runs in the background, reads the PDU again and compares: a PDU that says "ok" and still shows the old name is reported.
+The log (*Settings → Log*) has a line per PDU: who, which outlets, from what to what. A PDU without a write community is shown but not written.
+
+**By itself** (*Settings → Settings*): *Ask servman every … min* (default 60, 0 = never) makes the plan; *Write to the PDUs every … min*
+(default **0 = off**) writes it, at most 100 outlets a round (a big difference is written over several rounds, so that the first round is not a
+flood of changes). *Outlet name* is `200U13` or `200U13 a42sf` (the machine name; cut to fit the 20 characters of an APC outlet name). With
+both forms the two PDUs of a server are one line and a host is joined by the id: the id alone identifies the server.
+
+What is written is the *Config* name object of the MIB (read-write; the object that is read is a read-only copy): CyberPower ePDU2
+(`ePDU2OutletSwitched/Metered/MonitoredConfigName`), APC rPDU2 (`rPDU2OutletSwitched/MeteredConfigName`) and the older APC rPDU
+(`rPDUOutletConfigOutletName`). The older CyberPower "SW" models are not written to. These object numbers come from the MIB files and
+are covered by tests against a simulated device; they have **not** been tried on a real PDU of every model: that is why the read-back
+check exists. Names are ASCII, 1 to 20 characters.
+
 ## Data and backup
 
 Everything is in `/var/lib/pdu-monitor`: `pdu-monitor.db` (racks, PDUs, hosts, history, log), `secret.key` (encrypts the SNMP

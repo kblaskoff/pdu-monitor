@@ -43,6 +43,13 @@ Three parts in one repository:
   (the server keeps only its SHA-256 in `config.yaml`: `pdumonitord collector-token -name NAME`). It pushes statuses every 60 s and the tops every 300 s.
   Hosts a collector reports are created on the server by themselves (`hosts.collector` column). The owner said the PDU collector must
   not be a separate server: PDUs stay in `pdumonitord`.
+* **Outlet names come from servman and are written to the PDUs** (the owner's decision: the PDU itself carries the name; the system reads the names back).
+  `server/internal/servman` (client of the inventory API, token from a file) + planner; `app/servman.go` (plan, write with read-back check, audit, loop);
+  the intervals (ask / write, 0 = off) and the form (`200U13` or `200U13 a42sf`) are **settings in the web UI**, not in the config file.
+  Safety rules: only outlets servman names are touched, conflicts are never written, the automatic write is capped at 100 outlets a round and
+  off by default, everything is audited. `pdu.ServerKey` takes the first token when the name is `CCID + machine name`. The writable name OIDs
+  (Config tables) are from the MIB documentation and not yet proven on every real model. Servman API: `/api/servers/get?per_page=all`, each
+  record has `ccid` (200U13) and `pdu: [{pdu_ccid, pdu_port}]`; the owner's real token must never be written anywhere in the repo.
 * **No notifications for ZFS DEGRADED** (the owner has Nagios). Over-limit alerts for racks: channel not decided yet.
 * The owner asked that more host statistics will come later; keep the agent format extensible (versioned, strict parsing on the server side).
 

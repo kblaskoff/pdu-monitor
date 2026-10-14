@@ -128,6 +128,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsGet))
 	mux.HandleFunc("PUT /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsPut))
 	mux.HandleFunc("POST /api/admin/import", s.api(auth.RoleAdmin, s.handleImport))
+	mux.HandleFunc("GET /api/admin/servman", s.api(auth.RoleAdmin, s.handleServman))
+	mux.HandleFunc("POST /api/admin/servman/refresh", s.api(auth.RoleAdmin, s.handleServmanRefresh))
+	mux.HandleFunc("POST /api/admin/servman/apply", s.api(auth.RoleAdmin, s.handleServmanApply))
 	mux.HandleFunc("GET /api/admin/audit", s.api(auth.RoleAdmin, s.handleAudit))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { writeError(w, http.StatusNotFound, "no such call") })
 

@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/auth"
+	"github.com/kblaskoff/pdu-monitor/server/internal/servman"
 )
 
 // Config is the whole configuration file.
@@ -63,6 +64,18 @@ type Config struct {
 	// its SHA-256 (make both with: pdumonitord collector-token -name NAME).
 	Collectors []Collector `yaml:"collectors"`
 
+	// Servman is the inventory that says which server is plugged into which outlet of which PDU: the outlets are named after it. The
+	// intervals and the format of the names are in the settings of the web interface. Leave the section out to turn this off.
+	Servman struct {
+		URL string `yaml:"url"`
+		// TokenFile holds the token of the API (one line, chmod 600). The token is never kept in this file or in the repository.
+		TokenFile string `yaml:"token_file"`
+		CAFile    string `yaml:"ca_file"`
+		// InsecureSkipVerify turns the check of the server certificate off: only for an internal certificate whose CA you cannot give.
+		InsecureSkipVerify bool     `yaml:"insecure_skip_verify"`
+		Sources            []string `yaml:"sources"` // servers (the default) and netswitches
+	} `yaml:"servman"`
+
 	// Debug writes every SNMP request and every step of the login (never a password) to the log.
 	Debug bool `yaml:"debug"`
 }
@@ -110,6 +123,16 @@ func (c *Config) finish(dir string) error {
 	if c.Session.MaxHours <= 0 {
 		c.Session.MaxHours = 24
 	}
+	if c.Servman.URL != "" {
+		if c.Servman.TokenFile == "" {
+			return errors.New("servman.token_file: say where the token of the API is")
+		}
+		for _, src := range c.Servman.Sources {
+			if src != "servers" && src != "netswitches" {
+				return fmt.Errorf("servman.sources: %q is not known (servers, netswitches)", src)
+			}
+		}
+	}
 	seen := map[string]bool{}
 	for i, col := range c.Collectors {
 		c.Collectors[i].Name = strings.TrimSpace(col.Name)
@@ -127,6 +150,19 @@ func (c *Config) finish(dir string) error {
 		}
 	}
 	return nil
+}
+
+// ServmanConfig is the connection to servman (the token is read from its file); ok is false when the section is not there.
+func (c *Config) ServmanConfig() (cfg servman.Config, ok bool, err error) {
+	if c.Servman.URL == "" {
+		return cfg, false, nil
+	}
+	token, err := os.ReadFile(c.Servman.TokenFile)
+	if err != nil {
+		return cfg, true, err
+	}
+	return servman.Config{URL: c.Servman.URL, Token: strings.TrimSpace(string(token)), CAFile: c.Servman.CAFile,
+		InsecureSkipVerify: c.Servman.InsecureSkipVerify, Sources: c.Servman.Sources}, true, nil
 }
 
 // LDAPConfig converts the section for the auth package; the bind password is read from its own file (mode 0600).
@@ -188,6 +224,13 @@ ldap:
 # local_admin:
 #   username: emergency
 #   password_hash: "$2a$12$..."
+
+# servman says which server is plugged into which outlet; the outlets of the PDUs are named after it (200U13). How often it is asked
+# and written, and whether the name has the machine name too, are in the settings of the web interface.
+# servman:
+#   url: "https://replace_me.example.com"
+#   token_file: /etc/pdu-monitor/servman-token     # one line, chmod 640 root:pdumonitor
+#   ca_file: /etc/pdu-monitor/servman-ca.pem       # or, if you cannot get the CA: insecure_skip_verify: true
 
 # Collectors push the readings of the hypervisors (pdu-collector). Add one with: pdumonitord collector-token -name collector-a
 # collectors:

@@ -505,10 +505,21 @@ type Settings struct {
 	WarnPercent        int `json:"warnPercent"`
 	RestartDelaySecond int `json:"restartDelaySeconds"`
 	SampleRetentionDay int `json:"sampleRetentionDays"`
+	// The names of the outlets are taken from servman and written to the PDUs (see the servman package).
+	ServmanPollMinutes int    `json:"servmanPollMinutes"` // how often servman is asked and the plan made; 0 = never by itself
+	ServmanSyncMinutes int    `json:"servmanSyncMinutes"` // how often the planned names are written to the PDUs; 0 = only when an administrator presses the button
+	ServmanNameFormat  string `json:"servmanNameFormat"`  // "ccid" (200U13) or "ccid_name" (200U13 a42sf)
 }
 
+// The two forms of an outlet name.
+const (
+	NameCCID     = "ccid"
+	NameCCIDName = "ccid_name"
+)
+
 func DefaultSettings() Settings {
-	return Settings{PollSeconds: 10, HostPollSeconds: 60, WarnPercent: 80, RestartDelaySecond: 8, SampleRetentionDay: 90}
+	return Settings{PollSeconds: 10, HostPollSeconds: 60, WarnPercent: 80, RestartDelaySecond: 8, SampleRetentionDay: 90,
+		ServmanPollMinutes: 60, ServmanSyncMinutes: 0, ServmanNameFormat: NameCCID}
 }
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {
@@ -540,6 +551,11 @@ func (st Settings) sane() Settings {
 	st.WarnPercent = clamp(st.WarnPercent, 50, 99, d.WarnPercent)
 	st.RestartDelaySecond = clamp(st.RestartDelaySecond, 3, 60, d.RestartDelaySecond)
 	st.SampleRetentionDay = clamp(st.SampleRetentionDay, 1, 3650, d.SampleRetentionDay)
+	st.ServmanPollMinutes = clamp(st.ServmanPollMinutes, 0, 1440, d.ServmanPollMinutes)
+	st.ServmanSyncMinutes = clamp(st.ServmanSyncMinutes, 0, 10080, d.ServmanSyncMinutes)
+	if st.ServmanNameFormat != NameCCID && st.ServmanNameFormat != NameCCIDName {
+		st.ServmanNameFormat = d.ServmanNameFormat
+	}
 	return st
 }
 
