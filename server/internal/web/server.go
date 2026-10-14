@@ -84,6 +84,8 @@ type Server struct {
 	Secure  bool
 	Demo    bool
 	Version string
+	// UpdateDir is where the update request, status and log of this server live (its data directory); empty: no update button.
+	UpdateDir string
 	// Collectors may push the readings of hypervisors (POST /api/collector/report) with their token.
 	Collectors []CollectorAuth
 	Log        func(string)
@@ -101,7 +103,7 @@ type Server struct {
 func New(a *app.App, st *store.Store, authn auth.Authenticator, sessions *auth.Sessions) *Server {
 	return &Server{App: a, Store: st, Auth: authn, Sessions: sessions, Now: time.Now, Version: "dev",
 		byIP: auth.NewLimiter(20, 10*time.Minute), byUser: auth.NewLimiter(6, 15*time.Minute), FailureDelay: 400 * time.Millisecond,
-		pendingKeys: newPendingKeys(), collected: &collectors{seen: map[string]collectorSeen{}}}
+		pendingKeys: newPendingKeys(), collected: &collectors{seen: map[string]collectorSeen{}, wanted: map[string]updateWish{}}}
 }
 
 func (s *Server) logf(msg string) {
@@ -151,6 +153,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsGet))
 	mux.HandleFunc("PUT /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsPut))
 	mux.HandleFunc("POST /api/admin/import", s.api(auth.RoleAdmin, s.handleImport))
+	mux.HandleFunc("GET /api/admin/update", s.api(auth.RoleAdmin, s.handleUpdate))
+	mux.HandleFunc("POST /api/admin/update/server", s.api(auth.RoleAdmin, s.handleUpdateServer))
+	mux.HandleFunc("POST /api/admin/update/collectors", s.api(auth.RoleAdmin, s.handleUpdateCollectors))
 	mux.HandleFunc("GET /api/admin/servman", s.api(auth.RoleAdmin, s.handleServman))
 	mux.HandleFunc("POST /api/admin/servman/refresh", s.api(auth.RoleAdmin, s.handleServmanRefresh))
 	mux.HandleFunc("POST /api/admin/servman/apply", s.api(auth.RoleAdmin, s.handleServmanApply))

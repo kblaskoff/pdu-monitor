@@ -21,6 +21,17 @@ install -d -m 750 -o root -g pdumonitor /etc/pdu-monitor
 install -m 755 "$BIN" /usr/local/bin/pdumonitord
 install -m 644 "$HERE/pdu-monitor.service" /etc/systemd/system/pdu-monitor.service
 
+# the "Update" button of the web interface: the web process leaves a file, these (root) units do the work
+install -m 755 "$HERE/update.sh" /usr/local/sbin/pdu-update
+install -m 644 "$HERE/pdu-monitor-update.path" "$HERE/pdu-monitor-update.service" /etc/systemd/system/
+if [ ! -e /etc/pdu-monitor/update.conf ]; then
+  REPO=$(git -c safe.directory='*' -C "$HERE" rev-parse --show-toplevel 2>/dev/null || true)
+  printf '# the git clone the update button builds from (git fetch + fast-forward + go build)\nREPO_DIR=%s\nBRANCH=main\n' "$REPO" > /etc/pdu-monitor/update.conf
+  chmod 644 /etc/pdu-monitor/update.conf
+  [ -n "$REPO" ] || echo "NOTE: put the path of your git clone into REPO_DIR in /etc/pdu-monitor/update.conf (the update button needs it)."
+fi
+touch /var/lib/pdu-monitor/.updater && chown pdumonitor:pdumonitor /var/lib/pdu-monitor/.updater
+
 if [ ! -e /etc/pdu-monitor/config.yaml ]; then
   /usr/local/bin/pdumonitord init -config /etc/pdu-monitor/config.yaml
   chown root:pdumonitor /etc/pdu-monitor/config.yaml
@@ -30,6 +41,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable pdu-monitor.service >/dev/null
+systemctl enable --now pdu-monitor-update.path >/dev/null
 echo
 echo "Installed. Next:"
 echo "  1. sudo nano /etc/pdu-monitor/config.yaml"

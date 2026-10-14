@@ -18,12 +18,19 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/kblaskoff/pdu-monitor/server/internal/buildinfo"
 	"github.com/kblaskoff/pdu-monitor/server/internal/collector"
 	"github.com/kblaskoff/pdu-monitor/server/internal/hostinfo"
 )
 
-// version is set when building: -ldflags "-X main.version=1.0.0"
+// version is the commit the binary was built from (the updater builds in a clone); -ldflags "-X main.version=1.0.0" overrides it
 var version = "dev"
+
+func init() {
+	if version == "dev" {
+		version = buildinfo.Version("dev")
+	}
+}
 
 const usage = `pdu-collector - reads hypervisors and pushes the readings to the PDU Monitor server
 

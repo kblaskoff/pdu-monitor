@@ -55,6 +55,15 @@ Three parts in one repository:
   (sum, readings, lowest) of the idle % it already reads every minute in table `host_idle` (`store/idle.go`, migration 3; `app/idle.go` keeps the
   current hour in memory, flushes every 5 min and on shutdown; 400 days of retention). No extra load on the hosts, about 8,760 rows per host and year.
   It fills from the day this was installed (no backfill). Days/weeks are cut in the time zone of the viewer's browser. API `GET /api/hosts/{id}/idle?range=14d|1y&tz=`.
+* **Updates from the web (Settings → Software)** (the owner's decisions: built locally from a clone, by a button not by a timer, no SSH, a minute or two of delay is fine):
+  the version is the git commit (`internal/buildinfo`, from `debug.ReadBuildInfo`; no ldflags). The application never runs anything: it writes
+  `update-request` into its data dir (`internal/updater`), and a **root** systemd path unit starts `deploy/update.sh` (installed as
+  `/usr/local/sbin/pdu-update server|collector`: git fetch + ff-only, go build to a temp dir, skip if same version, replace binary, restart,
+  roll back when it does not stay up; writes `update.status`/`update.log` that the page shows). Collectors: the server holds a flag per
+  collector and returns `"update": id` in the answer to `/api/collector/report`; the collector writes its own request file and acknowledges with
+  `update_seen`; the flag is dropped on ack, on a version change or after 15 minutes. `deploy/install.sh` and `deploy/collector/install.sh` install the
+  units and `update.conf` (REPO_DIR, BRANCH) and the `.updater` marker. Needs git + go + a fast-forwardable clone on each machine. The script is
+  tested here with a fake `systemctl` only; the units are not tried on a real host. The host agents keep the nightly `hostinfo-update`.
 * **No notifications for ZFS DEGRADED** (the owner has Nagios). Over-limit alerts for racks: channel not decided yet.
 * The owner asked that more host statistics will come later; keep the agent format extensible (versioned, strict parsing on the server side).
 

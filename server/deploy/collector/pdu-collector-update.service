@@ -1,0 +1,19 @@
+[Unit]
+Description=Update the PDU Monitor collector from its git clone (started by pdu-collector-update.path)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# root, on purpose: it replaces /usr/local/bin/pdu-collector and restarts the service. The collector only leaves a file; nothing in the
+# file is read as a command. Not part of pdu-collector.service, so restarting that does not stop the update.
+ExecStart=/usr/local/sbin/pdu-update collector
+TimeoutStartSec=900
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=/usr/local/bin /var/lib/pdu-collector
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes

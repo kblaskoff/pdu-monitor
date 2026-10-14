@@ -21,6 +21,17 @@ install -d -m 750 -o root -g pdu-collector /etc/pdu-collector
 install -m 755 "$BIN" /usr/local/bin/pdu-collector
 install -m 644 "$HERE/pdu-collector.service" /etc/systemd/system/pdu-collector.service
 
+# the "Update collectors" button of the server's web interface: the collector leaves a file, these (root) units do the work
+install -m 755 "$HERE/../update.sh" /usr/local/sbin/pdu-update
+install -m 644 "$HERE/pdu-collector-update.path" "$HERE/pdu-collector-update.service" /etc/systemd/system/
+if [ ! -e /etc/pdu-collector/update.conf ]; then
+  REPO=$(git -c safe.directory='*' -C "$HERE" rev-parse --show-toplevel 2>/dev/null || true)
+  printf '# the git clone the update builds from (git fetch + fast-forward + go build)\nREPO_DIR=%s\nBRANCH=main\n' "$REPO" > /etc/pdu-collector/update.conf
+  chmod 644 /etc/pdu-collector/update.conf
+  [ -n "$REPO" ] || echo "NOTE: put the path of your git clone into REPO_DIR in /etc/pdu-collector/update.conf (the update needs it)."
+fi
+touch /var/lib/pdu-collector/.updater && chown pdu-collector:pdu-collector /var/lib/pdu-collector/.updater
+
 if [ ! -e /etc/pdu-collector/config.yaml ]; then
   /usr/local/bin/pdu-collector init -config /etc/pdu-collector/config.yaml
   chown root:pdu-collector /etc/pdu-collector/config.yaml
@@ -29,6 +40,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable pdu-collector.service >/dev/null
+systemctl enable --now pdu-collector-update.path >/dev/null
 echo
 echo "Installed. Next:"
 echo "  1. On the server:  pdumonitord collector-token -name collector-a   (put the lines it prints into the server's config.yaml, restart the server)"

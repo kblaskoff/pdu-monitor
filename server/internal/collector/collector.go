@@ -17,6 +17,7 @@ import (
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/hostinfo"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
+	"github.com/kblaskoff/pdu-monitor/server/internal/updater"
 )
 
 // Collector reads the hosts and pushes what it read.
@@ -32,6 +33,8 @@ type Collector struct {
 	logMu        sync.Mutex // hosts are read at the same time and all write to the log
 	lastTop      time.Time
 	lastRejected string
+	updateSeen   string // the id of the last update request this collector acted on; sent back so that the server stops asking
+	updateWarned string
 }
 
 // What is sent. It is the same shape the server's /api/collector/report takes: the answer of the agent is passed on as it was.
@@ -43,8 +46,9 @@ type hostReport struct {
 }
 
 type report struct {
-	Version string       `json:"version"`
-	Hosts   []hostReport `json:"hosts"`
+	Version    string       `json:"version"`
+	UpdateSeen string       `json:"update_seen,omitempty"`
+	Hosts      []hostReport `json:"hosts"`
 }
 
 type answer struct {
@@ -54,7 +58,8 @@ type answer struct {
 		Name   string `json:"name"`
 		Reason string `json:"reason"`
 	} `json:"rejected"`
-	Error string `json:"error"`
+	Error  string `json:"error"`
+	Update string `json:"update"` // an administrator pressed "Update": the id of the request
 }
 
 // NewHTTPClient talks TLS 1.2+ and never follows a redirect (the token must not be sent anywhere else).
@@ -203,6 +208,7 @@ func (c *Collector) Cycle(ctx context.Context) error {
 }
 
 func (c *Collector) push(ctx context.Context, rep report) error {
+	rep.UpdateSeen = c.updateSeen
 	body, err := json.Marshal(rep)
 	if err != nil {
 		return err
@@ -229,6 +235,9 @@ func (c *Collector) push(ctx context.Context, rep report) error {
 		}
 		return fmt.Errorf("the server refused the readings: %s", msg)
 	}
+	if ans.Update != "" && ans.Update != c.updateSeen {
+		c.requestUpdate(ans.Update)
+	}
 	var rej []string
 	for _, r := range ans.Rejected {
 		rej = append(rej, r.Name+" ("+r.Reason+")")
@@ -240,6 +249,22 @@ func (c *Collector) push(ctx context.Context, rep report) error {
 		}
 	}
 	return nil
+}
+
+// requestUpdate leaves the request for the updater of this machine (a root path unit): the collector itself runs nothing and could not
+// replace its own binary. Without the updater installed it says so once and does not claim to have acted, so the server asks again
+// for a while (and gives up).
+func (c *Collector) requestUpdate(id string) {
+	err := updater.Request(c.Cfg.DataDir, "collector")
+	if err != nil && !errors.Is(err, updater.ErrPending) {
+		if c.updateWarned != id {
+			c.updateWarned = id
+			c.logf("the server asked for an update: %v", err)
+		}
+		return
+	}
+	c.updateSeen = id
+	c.logf("the server asked for an update: the updater has been told")
 }
 
 // Run reads and pushes until the context ends.

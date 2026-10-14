@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
+	"github.com/kblaskoff/pdu-monitor/server/internal/updater"
 )
 
 func writeConfig(t *testing.T, text string) string {
@@ -274,5 +275,49 @@ func TestToken(t *testing.T) {
 	}
 	if _, err := ReadToken(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Error("a missing file was accepted")
+	}
+}
+
+func TestUpdateRequestIsLeftForTheUpdaterAndAcknowledged(t *testing.T) {
+	ts, got := stub(t, 200, `{"ok":true,"accepted":2,"rejected":[],"update":"req-1"}`)
+	r := &fakeRunner{out: map[string]string{"status": goodStatus}}
+	c := newCollector(t, ts.URL, r)
+	var logs []string
+	c.Log = func(s string) { logs = append(logs, s) }
+
+	// the updater is not installed here: it is said once, nothing is claimed, the server keeps asking
+	_ = c.Cycle(context.Background())
+	_ = c.Cycle(context.Background())
+	if _, err := os.Stat(filepath.Join(c.Cfg.DataDir, updater.RequestFile)); err == nil {
+		t.Fatal("a request was written without an updater")
+	}
+	n := 0
+	for _, l := range logs {
+		if strings.Contains(l, "updater is not installed") {
+			n++
+		}
+	}
+	if n != 1 || got()[len(got())-1].rep.UpdateSeen != "" {
+		t.Fatalf("said %d times: %v", n, logs)
+	}
+
+	// installed: the file is written once, and the next report says that it was seen
+	if err := os.WriteFile(filepath.Join(c.Cfg.DataDir, updater.MarkerFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Cycle(context.Background())
+	if _, err := os.Stat(filepath.Join(c.Cfg.DataDir, updater.RequestFile)); err != nil {
+		t.Fatalf("no request: %v", err)
+	}
+	_ = c.Cycle(context.Background())
+	all := got()
+	if all[len(all)-1].rep.UpdateSeen != "req-1" {
+		t.Errorf("not acknowledged: %+v", all[len(all)-1].rep)
+	}
+	// and it is not written again while the server keeps the same id
+	_ = os.Remove(filepath.Join(c.Cfg.DataDir, updater.RequestFile))
+	_ = c.Cycle(context.Background())
+	if _, err := os.Stat(filepath.Join(c.Cfg.DataDir, updater.RequestFile)); err == nil {
+		t.Error("the same request was acted on twice")
 	}
 }

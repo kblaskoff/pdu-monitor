@@ -29,8 +29,9 @@ type collectorSeen struct {
 }
 
 type collectors struct {
-	mu   sync.Mutex
-	seen map[string]collectorSeen
+	mu     sync.Mutex
+	seen   map[string]collectorSeen
+	wanted map[string]updateWish // collectors that are to update, by name
 }
 
 // CollectorStatus is what the administrator sees of one collector.
@@ -68,8 +69,9 @@ type collectedHost struct {
 }
 
 type collectorReport struct {
-	Version string          `json:"version"`
-	Hosts   []collectedHost `json:"hosts"`
+	Version    string          `json:"version"`
+	UpdateSeen string          `json:"update_seen"` // the id of the update request the collector has acted on
+	Hosts      []collectedHost `json:"hosts"`
 }
 
 type rejectedHost struct {
@@ -178,8 +180,9 @@ func (s *Server) handleCollectorReport(w http.ResponseWriter, r *http.Request) {
 		seen.Version = v
 	}
 	s.collected.seen[col.Name] = seen
+	update := s.collected.updateFor(col.Name, hostinfo.CleanText(rep.UpdateSeen), seen.Version, s.Now())
 	s.collected.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"ok": true, "accepted": accepted, "rejected": nonNil(rejected)})
+	writeJSON(w, 200, map[string]any{"ok": true, "accepted": accepted, "rejected": nonNil(rejected), "update": update})
 }
 
 func (s *Server) knownCollector(name string) bool {

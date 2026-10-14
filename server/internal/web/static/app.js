@@ -607,22 +607,25 @@ async function viewHost(id) {
     else {
       const week = idle.unit === 'week';
       const when = (b) => new Date(b.t * 1000).toLocaleDateString(undefined, { weekday: week ? undefined : 'short', day: 'numeric', month: 'short', year: week ? 'numeric' : undefined });
-      const cols = idle.buckets.map((b, i) => {
+      // newest on the left: what a person looks for first is today
+      const shown = idle.buckets.slice().reverse();
+      const cols = shown.map((b, i) => {
         const col = h('div', { class: 'col' + (b.avg == null ? ' empty' : ''), title: b.avg == null ? `${week ? 'Week of ' : ''}${when(b)}: no readings` : `${week ? 'Week of ' : ''}${when(b)}\naverage idle ${nf(b.avg, 1)}%\nlowest hour ${nf(b.min, 1)}%\n${b.n} readings` },
           h('span', { class: 'v' }, b.avg == null ? '' : Math.round(b.avg)));
         const fill = h('i', { class: b.avg == null ? '' : idleClass(b.avg).replace('c-', '') });
         fill.style.height = b.avg == null ? '0%' : Math.max(2, b.avg) + '%';
         col.append(fill);
         const d = new Date(b.t * 1000);
-        // a label under every bar for days; for weeks only when the month changes, otherwise 53 labels would collide
-        const prev = i ? new Date(idle.buckets[i - 1].t * 1000) : null;
-        const label = week ? (!prev || prev.getMonth() !== d.getMonth() ? d.toLocaleDateString(undefined, { month: 'short' }) : '') : String(d.getDate());
+        // a label under every bar for days; for weeks only at the left edge of a month (the bar to its left is newer), otherwise 53 labels would collide
+        const left = i ? new Date(shown[i - 1].t * 1000) : null;
+        const leftLabelled = i > 1 && new Date(shown[i - 2].t * 1000).getMonth() !== new Date(shown[i - 1].t * 1000).getMonth();
+        const label = week ? (!left || (left.getMonth() !== d.getMonth() && !leftLabelled) ? d.toLocaleDateString(undefined, { month: 'short' }) : '') : String(d.getDate());
         col.append(h('em', {}, label));
         return col;
       });
       idleBody = [h('div', { class: 'idlebars' + (week ? ' weeks' : '') }, h('div', { class: 'ticks' }, h('span', {}, '100'), h('span', {}, '50'), h('span', {}, '0')), h('div', { class: 'cols' }, cols)),
-        h('p', { class: 'note' }, (week ? 'Average CPU idle per week (weeks begin on Monday), ' : 'Average CPU idle per day, ') + 'red below 15 %, orange below 40 %. Hover a bar for the lowest hour. ' +
-          (idle.firstData && idle.buckets[0].t < idle.firstData - 86400 ? 'Earlier bars are empty because the server keeps this history only since ' + new Date(idle.firstData * 1000).toLocaleDateString() + '.' : ''))];
+        h('p', { class: 'note' }, (week ? 'Newest on the left. Average CPU idle per week (weeks begin on Monday), ' : 'Newest on the left. Average CPU idle per day, ') + 'red below 15 %, orange below 40 %. Hover a bar for the lowest hour. ' +
+          (idle.firstData && idle.buckets[0].t < idle.firstData - 86400 ? 'Older bars (right) are empty because the server keeps this history only since ' + new Date(idle.firstData * 1000).toLocaleDateString() + '.' : ''))];
     }
     const idleCard = h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px' }, h('h2', {}, 'CPU idle %'), idleTabs), idleBody);
 
@@ -678,7 +681,7 @@ const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return N
 
 async function viewAdmin(tab) {
   if (!isAdmin()) { mount('', h('div', { class: 'card' }, 'Only administrators can change the settings.')); return; }
-  const tabs = [['racks', 'Racks'], ['pdus', 'PDUs'], ['hosts', 'Hosts'], ['names', 'Names'], ['settings', 'Settings'], ['import', 'Import'], ['audit', 'Log']];
+  const tabs = [['racks', 'Racks'], ['pdus', 'PDUs'], ['hosts', 'Hosts'], ['names', 'Names'], ['settings', 'Settings'], ['software', 'Software'], ['import', 'Import'], ['audit', 'Log']];
   if (!tabs.some((t) => t[0] === tab)) tab = 'racks';
   const nav = h('div', { class: 'tabs' }, tabs.map(([k, v]) => h('a', { href: '#/admin/' + k, class: k === tab ? 'on' : '' }, v)));
   const body = h('div');
@@ -686,6 +689,7 @@ async function viewAdmin(tab) {
   const reload = () => viewAdmin(tab).catch((e) => failed(e));
   if (tab === 'audit') return adminAudit(body);
   if (tab === 'names') return adminNames(body);
+  if (tab === 'software') return adminSoftware(body);
   if (tab === 'import') return adminImport(body, reload);
   const cfg = await api('GET', '/api/admin/config');
   if (tab === 'racks') adminRacks(body, cfg, reload);
@@ -917,6 +921,75 @@ async function adminNames(body) {
   stopPolling();
   S.refresh = async () => { try { st = await api('GET', '/api/admin/servman'); draw(); } catch (e) { /* the next round */ } };
   S.timer = setInterval(() => { if (!document.hidden && !dialogOpen()) S.refresh(); }, 3000);
+}
+
+// The versions of this server and of the collectors, and the buttons that update them. Nothing connects anywhere from here: the server
+// asks the root side of its own machine (a file), the collectors hear it in the answer to their next report (up to a minute).
+async function adminSoftware(body) {
+  let st = await api('GET', '/api/admin/update');
+  const loadedVersion = (S.session && S.session.version) || st.version;
+  let waiting = false, down = false;
+  const stateText = (sv) => {
+    if (sv.pending) return ['Waiting for the updater to start…', ''];
+    switch (sv.state) {
+      case 'running': return ['Updating: ' + (sv.detail || ''), ''];
+      case 'ok': return ['Updated: ' + sv.detail, 'c-ok'];
+      case 'uptodate': return ['Nothing to do: ' + sv.detail, 'c-ok'];
+      case 'failed': return ['Not updated: ' + sv.detail, 'c-over'];
+      default: return ['No update has been made from here yet.', 'muted'];
+    }
+  };
+  async function updateServer() {
+    const ok = await confirmDialog('Update this server?', h('div', {}, h('p', {}, 'The newest version of the repository clone on this machine is built and installed, and the server restarts. The web interface is away for about half a minute.'),
+      h('div', { class: 'effect' }, 'If the new version does not stay up, the old one is put back by itself. Everything is in the log.')), 'Update', false);
+    if (!ok) return;
+    try { await api('POST', '/api/admin/update/server', { confirm: true }); waiting = true; } catch (e) { setBanner({ title: 'Not started', error: e.message, running: false }); }
+    refresh();
+  }
+  async function updateCollectors(name) {
+    const ok = await confirmDialog(name ? `Update ${name}?` : 'Update all collectors?', h('div', {}, h('p', {}, 'Each collector hears it in the answer to its next report (up to a minute), builds the newest version on its own machine and restarts.'),
+      h('div', { class: 'effect' }, 'Nothing here connects to the collectors. A collector without the updater installed (re-run its deploy/collector/install.sh once) does nothing; the request is dropped after 15 minutes.')), 'Update', false);
+    if (!ok) return;
+    try { await api('POST', '/api/admin/update/collectors', { confirm: true, collector: name || '' }); } catch (e) { setBanner({ title: 'Not started', error: e.message, running: false }); }
+    refresh();
+  }
+  function draw() {
+    if (dialogOpen()) return;
+    const sv = st.server;
+    const [text, cls] = stateText(sv);
+    const running = sv.pending || sv.state === 'running';
+    const newer = st.version !== loadedVersion;
+    const serverCard = h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h2', {}, 'This server'),
+      h('div', { style: 'display:flex;gap:14px;align-items:center;flex-wrap:wrap' },
+        h('div', {}, h('div', {}, 'Version ', h('strong', { class: 'mono' }, st.version)), h('div', { class: 'small ' + cls }, text + (sv.at && sv.state ? ' · ' + datetime(sv.at) : ''))),
+        h('div', { class: 'spacer' }),
+        down ? h('div', { style: 'display:flex;gap:8px;align-items:center' }, h('div', { class: 'spinner' }), 'The server is restarting…') : (running ? h('div', { class: 'spinner' }) : null),
+        h('button', { class: 'primary', disabled: running || down || !sv.available, title: sv.available ? '' : 'The updater is not installed on this machine', onclick: updateServer }, 'Update the server')),
+      !sv.available ? h('p', { class: 'note' }, 'The updater is not installed here yet. Once: sudo deploy/install.sh --binary ./pdumonitord (from the clone), which also puts REPO_DIR (the clone) into /etc/pdu-monitor/update.conf.') : null,
+      newer ? h('p', { class: 'notice', style: 'margin:10px 0 0' }, 'The server has a new version. ', h('button', { class: 'link', onclick: () => location.reload() }, 'Reload this page'), ' (or Ctrl+F5) to get the new screens.') : null,
+      sv.log && sv.log.length ? h('details', { style: 'margin-top:10px' }, h('summary', {}, 'Output of the last update'), h('pre', { class: 'key' }, sv.log.join('\n'))) : null);
+    const cols = st.collectors || [];
+    const colCard = cols.length ? h('div', { class: 'card' }, h('div', { style: 'display:flex;gap:14px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Collectors'), h('div', { class: 'spacer' }),
+        h('button', { class: 'primary', disabled: cols.some((c) => c.requested), onclick: () => updateCollectors('') }, 'Update all collectors')),
+      h('div', { class: 'tablewrap', style: 'box-shadow:none;margin-top:8px' }, h('table', {}, h('thead', {}, h('tr', {}, ['Collector', 'Version', 'Last report', ''].map((t) => h('th', {}, t)))),
+        h('tbody', {}, cols.map((c) => {
+          const age = c.lastSeen ? Math.round((Date.now() - new Date(c.lastSeen).getTime()) / 1000) : null;
+          const same = c.version && c.version === st.version;
+          return h('tr', {}, h('td', { class: 'name' }, c.name), h('td', { class: 'mono' }, c.version || '—', c.version ? h('span', { class: 'small ' + (same ? 'c-ok' : 'muted'), style: 'margin-left:8px' }, same ? 'same as the server' : 'differs from the server') : null),
+            h('td', {}, age == null ? h('span', { class: 'c-over' }, 'never') : h('span', { class: age > 180 ? 'c-over' : 'c-ok' }, ago(Math.max(age, 0)) + ' ago')),
+            h('td', { class: 'num' }, c.requested ? h('span', { class: 'muted small' }, 'asked, waiting for its next report…') : h('button', { class: 'small', onclick: () => updateCollectors(c.name) }, 'Update')));
+        })))),
+      h('p', { class: 'note' }, 'A collector tells its version with every report. A different version after the update means it worked; the same one means it was already the newest (or the updater is not installed there: see its log with journalctl -u pdu-collector-update).')) : h('div', { class: 'card' }, h('h2', {}, 'Collectors'), h('p', { class: 'muted' }, 'No collector is configured on this server.'));
+    body.replaceChildren(serverCard, colCard);
+  }
+  async function refresh() {
+    try { st = await api('GET', '/api/admin/update'); down = false; if (st.server.state && st.server.state !== 'running' && !st.server.pending) waiting = false; } catch (e) { if (e instanceof ApiError && e.status === 401) return; down = waiting; }
+    draw();
+  }
+  draw();
+  stopPolling();
+  S.refresh = refresh;
+  S.timer = setInterval(() => { if (!document.hidden && !dialogOpen()) refresh(); }, 3000);
 }
 
 function adminImport(body, reload) {

@@ -1,0 +1,9 @@
+[Unit]
+Description=An update of the PDU Monitor collector was asked for in the web interface
+
+[Path]
+PathExists=/var/lib/pdu-collector/update-request
+Unit=pdu-collector-update.service
+
+[Install]
+WantedBy=multi-user.target

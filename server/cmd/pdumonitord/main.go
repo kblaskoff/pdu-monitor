@@ -34,6 +34,7 @@ import (
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/app"
 	"github.com/kblaskoff/pdu-monitor/server/internal/auth"
+	"github.com/kblaskoff/pdu-monitor/server/internal/buildinfo"
 	"github.com/kblaskoff/pdu-monitor/server/internal/config"
 	"github.com/kblaskoff/pdu-monitor/server/internal/demo"
 	"github.com/kblaskoff/pdu-monitor/server/internal/hostinfo"
@@ -42,8 +43,14 @@ import (
 	"github.com/kblaskoff/pdu-monitor/server/internal/web"
 )
 
-// version is set when building: -ldflags "-X main.version=1.0.0"
+// version is the commit the binary was built from (the updater builds in a clone); -ldflags "-X main.version=1.0.0" overrides it
 var version = "dev"
+
+func init() {
+	if version == "dev" {
+		version = buildinfo.Version("dev")
+	}
+}
 
 const usage = `pdumonitord - PDU Monitor server
 
@@ -229,6 +236,7 @@ func serve(args []string) error {
 	}
 	srv.Demo = *demoMode
 	srv.Version = version
+	srv.UpdateDir = cfg.DataDir
 	srv.Log = func(s string) { logger.Print(s) }
 
 	go application.Run(ctx)

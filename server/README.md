@@ -187,6 +187,25 @@ and its power outlet name with **Edit** to join it with its power. The server ne
   follows redirects, so the token cannot be sent anywhere else). For your own CA set `ca_file`.
 * A name that the server reads itself (or another collector reads) is refused. Wrong tokens lock the sender's address for a while.
 
+## Updating from the web interface (Settings → Software)
+
+The version of the server and of every collector is the commit they were built from. **Update the server** and **Update all collectors**
+(or one) build the newest `main` of the git clone that is on the machine and restart the program. Nothing connects anywhere with SSH:
+
+* **The server:** the web process writes one file (`/var/lib/pdu-monitor/update-request`). A root systemd path unit
+  (`pdu-monitor-update.path`) sees it and runs `/usr/local/sbin/pdu-update server` (`deploy/update.sh`): `git fetch` and fast-forward of the
+  clone, `go build` into a temporary directory, nothing to do when the commit is the one that runs, otherwise it replaces
+  `/usr/local/bin/pdumonitord`, restarts the service and **puts the old binary back** if the new one has not stayed up for 15 seconds.
+  The state and the output are shown on the page; the web interface is away for about half a minute.
+* **The collectors:** the button only sets a flag on the server. Every collector hears it in the answer to its next report (within a minute),
+  leaves its own request file, and its own root path unit does the same as above. After the restart it reports its new version; a
+  request that nobody takes is dropped after 15 minutes.
+
+Once on the server and once on every collector, to put the root side in place (re-running the install script is safe):
+`sudo ./deploy/install.sh --binary ./pdumonitord` and `sudo ./deploy/collector/install.sh --binary ./pdu-collector`, from the git clone.
+They write `REPO_DIR=` (the clone) and `BRANCH=main` into `/etc/pdu-monitor/update.conf` (`/etc/pdu-collector/update.conf`). The machine
+needs `git` and `go` (a clone that can be fast-forwarded: no local commits or changes in it). `journalctl -u pdu-monitor-update` has the details.
+
 ## Names of the outlets (servman)
 
 The servers are joined with their power by the **name of the outlet** (`200U13`: rack 200, unit 13). Servman, the inventory, knows which
