@@ -358,7 +358,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request, _ *auth.
 			hs["spaceWarn"]++
 		}
 	}
-	writeJSON(w, 200, map[string]any{"now": s.Now().Unix(), "totals": totals, "racks": racks, "hosts": hs})
+	writeJSON(w, 200, map[string]any{"now": s.Now().Unix(), "totals": totals, "racks": racks, "hosts": hs, "servman": s.servmanBrief()})
 }
 
 type portView struct {
@@ -684,4 +684,47 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request, _ *auth.Sessio
 		return
 	}
 	writeJSON(w, 200, op)
+}
+
+// handleHostIdle gives the CPU idle of a host as bars: the last 14 days (a bar a day) or the last year (a bar a week). The days and
+// weeks are those of the person who looks (tz is the offset of the browser in minutes, as JavaScript says it).
+func (s *Server) handleHostIdle(w http.ResponseWriter, r *http.Request, _ *auth.Session) {
+	h, ok := s.findHost(w, r)
+	if !ok {
+		return
+	}
+	unit, count, span := "day", 14, 24*time.Hour
+	switch r.URL.Query().Get("range") {
+	case "", "14d":
+	case "1y":
+		unit, count, span = "week", 53, 7*24*time.Hour
+	default:
+		writeError(w, http.StatusBadRequest, "the range must be 14d or 1y")
+		return
+	}
+	tz := 0
+	if v := r.URL.Query().Get("tz"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < -14*60 || n > 14*60 {
+			writeError(w, http.StatusBadRequest, "bad time zone")
+			return
+		}
+		tz = n
+	}
+	now := s.Now()
+	hours, err := s.Store.IdleHours(r.Context(), h.ID, now.Add(-time.Duration(count)*span-48*time.Hour), now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	buckets := store.BucketIdle(hours, unit, tz, count, now)
+	var first *int64 // since when there is anything: the bars before that are empty because nobody was looking yet
+	for _, b := range buckets {
+		if b.N > 0 {
+			t := b.Start
+			first = &t
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unit": unit, "buckets": buckets, "firstData": first})
 }

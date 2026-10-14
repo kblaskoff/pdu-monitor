@@ -41,6 +41,8 @@ type Poller struct {
 	TopTTL   time.Duration
 	Now      func() time.Time
 	Log      func(string)
+	// OnStatus is called with every new reading of a host (from a poll or from a collector), outside the lock of the poller.
+	OnStatus func(h store.Host, s *Status)
 
 	mu     sync.Mutex
 	states map[int64]*State
@@ -115,6 +117,13 @@ func (p *Poller) PollOne(ctx context.Context, h store.Host) {
 }
 
 func (p *Poller) set(h store.Host, s *Status, errText string) {
+	p.store(h, s, errText)
+	if s != nil && p.OnStatus != nil {
+		p.OnStatus(h, s)
+	}
+}
+
+func (p *Poller) store(h store.Host, s *Status, errText string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	old := p.states[h.ID]

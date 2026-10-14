@@ -46,10 +46,15 @@ Three parts in one repository:
 * **Outlet names come from servman and are written to the PDUs** (the owner's decision: the PDU itself carries the name; the system reads the names back).
   `server/internal/servman` (client of the inventory API, token from a file) + planner; `app/servman.go` (plan, write with read-back check, audit, loop);
   the intervals (ask / write, 0 = off) and the form (`200U13` or `200U13 a42sf`) are **settings in the web UI**, not in the config file.
-  Safety rules: only outlets servman names are touched, conflicts are never written, the automatic write is capped at 100 outlets a round and
-  off by default, everything is audited. `pdu.ServerKey` takes the first token when the name is `CCID + machine name`. The writable name OIDs
+  Safety rules: only outlets servman names are touched, conflicts (two devices on one outlet) are never written **and are shown to everybody at the top of the overview, one per line, until servman is
+  fixed** (the owner: "conflicts must not exist"), the automatic write is off by default (no cap on how many outlets one round writes: the owner decided so),
+  a SET without an answer is repeated and a lost answer is recognised by reading the PDU back, everything is audited. `pdu.ServerKey` takes the first token when the name is `CCID + machine name`. The writable name OIDs
   (Config tables) are from the MIB documentation and not yet proven on every real model. Servman API: `/api/servers/get?per_page=all`, each
   record has `ccid` (200U13) and `pdu: [{pdu_ccid, pdu_port}]`; the owner's real token must never be written anywhere in the repo.
+* **CPU idle history** (host page, under "Busiest VMs": 14 days as daily bars, 1 year as weekly bars): the server keeps hourly aggregates
+  (sum, readings, lowest) of the idle % it already reads every minute in table `host_idle` (`store/idle.go`, migration 3; `app/idle.go` keeps the
+  current hour in memory, flushes every 5 min and on shutdown; 400 days of retention). No extra load on the hosts, about 8,760 rows per host and year.
+  It fills from the day this was installed (no backfill). Days/weeks are cut in the time zone of the viewer's browser. API `GET /api/hosts/{id}/idle?range=14d|1y&tz=`.
 * **No notifications for ZFS DEGRADED** (the owner has Nagios). Over-limit alerts for racks: channel not decided yet.
 * The owner asked that more host statistics will come later; keep the agent format extensible (versioned, strict parsing on the server side).
 
@@ -112,7 +117,7 @@ CI: `.github/workflows/macos.yml` (named "build"): jobs `core-linux`, `hostagent
 
 ## Not done yet / ideas
 
-* Graphs of PDU history (the samples are already stored in `pdu_samples`) and of host history.
+* Graphs of PDU history (the samples are already stored in `pdu_samples`) and of more host history (idle bars exist; memory/load/disk do not).
 * Alerts for racks over the limit (channel to decide); more host statistics (the owner will ask).
 * Try everything against the real LDAP (`ldap-test`), real PDUs and a real hypervisor; adjust the example config for the real directory
   (needs from the owner: URL, OpenLDAP or AD, `user_base`, `group_base`, TLS/CA).

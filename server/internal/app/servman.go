@@ -10,6 +10,7 @@ import (
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/pdu"
 	"github.com/kblaskoff/pdu-monitor/server/internal/servman"
+	"github.com/kblaskoff/pdu-monitor/server/internal/snmp"
 )
 
 // ErrNoServman: servman is not configured (no servman section in the configuration file).
@@ -19,17 +20,24 @@ var ErrNoServman = errors.New("servman is not configured on this server")
 var ErrNamesBusy = errors.New("the names are being written right now: wait until it is finished")
 
 const (
-	maxManualNames = 500 // most outlets one press of the button writes
-	maxAutoNames   = 100 // most the automatic sync writes in one round: a big difference is written over several rounds
-	namePause      = 50 * time.Millisecond
-	defaultSweep   = 30 * time.Second
+	namePause    = 50 * time.Millisecond
+	defaultSweep = 30 * time.Second
+	setAttempts  = 3                       // a SET that gets no answer is repeated (setting a name twice does no harm)
+	setRetryWait = 1500 * time.Millisecond // the PDU may be slow to store the name
 )
 
-// NameSelection chooses what is written: everything in the plan, one PDU, or one outlet.
+// NameRef is one outlet of one PDU.
+type NameRef struct {
+	PDU    string `json:"pdu"`
+	Outlet int    `json:"outlet"`
+}
+
+// NameSelection chooses what is written: everything in the plan, one PDU, one outlet, or a list of outlets (to try the failed ones again).
 type NameSelection struct {
 	All    bool
 	PDU    string
 	Outlet int
+	Only   []NameRef
 }
 
 // NameFailure is an outlet that did not get its name.
@@ -156,10 +164,25 @@ func (a *App) endWriting() {
 }
 
 func checkSelection(sel NameSelection) error {
-	if !sel.All && sel.PDU == "" {
+	if !sel.All && sel.PDU == "" && len(sel.Only) == 0 {
 		return errors.New("choose what to write")
 	}
+	if len(sel.Only) > 2000 {
+		return errors.New("too many outlets")
+	}
 	return nil
+}
+
+func (sel NameSelection) wants(c servman.Change) bool {
+	if sel.All {
+		return true
+	}
+	for _, o := range sel.Only {
+		if strings.EqualFold(o.PDU, c.PDU) && o.Outlet == c.Outlet {
+			return true
+		}
+	}
+	return sel.PDU != "" && strings.EqualFold(c.PDU, sel.PDU) && (sel.Outlet == 0 || sel.Outlet == c.Outlet)
 }
 
 // ApplyNames writes the names of the plan to the PDUs and returns when it is done. It always plans afresh first, so that it never
@@ -210,22 +233,17 @@ func (a *App) doApply(ctx context.Context, user string, sel NameSelection, auto 
 		a.snMu.Unlock()
 		return nil, err
 	}
-	limit := maxManualNames
-	if auto {
-		limit = maxAutoNames
-	}
 	res := &NameResult{Failed: []NameFailure{}}
 	byPDU := map[string][]servman.Change{}
 	var order []string
 	for _, c := range plan.Changes {
-		if !sel.All && (!strings.EqualFold(c.PDU, sel.PDU) || (sel.Outlet != 0 && c.Outlet != sel.Outlet)) {
+		if !sel.wants(c) {
 			continue
 		}
-		if c.Blocked != "" || limit <= 0 {
+		if c.Blocked != "" {
 			res.Skipped++
 			continue
 		}
-		limit--
 		if _, ok := byPDU[c.PDU]; !ok {
 			order = append(order, c.PDU)
 		}
@@ -235,7 +253,7 @@ func (a *App) doApply(ctx context.Context, user string, sel NameSelection, auto 
 	for _, name := range order {
 		a.writePDU(ctx, user, byPDU[name], res)
 	}
-	summary := fmt.Sprintf("%d written, %d verified, %d failed, %d left", res.Written, res.Verified, len(res.Failed), res.Skipped)
+	summary := fmt.Sprintf("%d written, %d verified, %d failed, %d blocked", res.Written, res.Verified, len(res.Failed), res.Skipped)
 	a.snMu.Lock()
 	now := a.Now()
 	a.syncAt, a.syncRes, a.lastApply = &now, summary+" (by "+user+")", res
@@ -282,9 +300,7 @@ func (a *App) writePDU(ctx context.Context, user string, changes []servman.Chang
 			}
 			break
 		}
-		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := namer.SetOutletName(cctx, c.Outlet, c.Desired)
-		cancel()
+		err := a.setName(ctx, namer, c)
 		if err != nil {
 			failures++
 			fail(c, err.Error())
@@ -296,7 +312,15 @@ func (a *App) writePDU(ctx context.Context, user string, changes []servman.Chang
 		lines = append(lines, fmt.Sprintf("#%d %q→%q", c.Outlet, c.Current, c.Desired))
 		a.pause(ctx)
 	}
-	if len(done) > 0 {
+	var undone []servman.Change // the ones that got no answer: the PDU may have taken the name all the same
+	for _, f := range res.Failed[before:] {
+		for _, c := range changes {
+			if c.Outlet == f.Outlet && c.PDU == f.PDU && strings.Contains(f.Error, "no answer") {
+				undone = append(undone, c)
+			}
+		}
+	}
+	if len(done) > 0 || len(undone) > 0 {
 		a.PollPDUs(ctx, p.ID)
 		a.mu.Lock()
 		snap := a.readings[p.ID].Snapshot
@@ -314,6 +338,22 @@ func (a *App) writePDU(ctx context.Context, user string, changes []servman.Chang
 				fail(c, fmt.Sprintf("the PDU accepted the name but shows %q", now[c.Outlet]))
 			}
 		}
+		for _, c := range undone { // no answer, but the name is there: it was written, the answer was lost
+			if strings.TrimSpace(now[c.Outlet]) != c.Desired {
+				continue
+			}
+			kept := res.Failed[:before]
+			for _, f := range res.Failed[before:] {
+				if !(f.PDU == c.PDU && f.Outlet == c.Outlet) {
+					kept = append(kept, f)
+				}
+			}
+			res.Failed = kept
+			res.Written++
+			res.Verified++
+			done = append(done, c)
+			lines = append(lines, fmt.Sprintf("#%d %q→%q (the answer was lost, the name is there)", c.Outlet, c.Current, c.Desired))
+		}
 	}
 	detail := first.PDU + ": " + strings.Join(lines, ", ")
 	if len(detail) > 600 {
@@ -323,6 +363,29 @@ func (a *App) writePDU(ctx context.Context, user string, changes []servman.Chang
 		detail += fmt.Sprintf(" — %d failed", len(res.Failed))
 	}
 	_ = a.Store.Audit(ctx, user, "outlet.names", detail, len(res.Failed) == before)
+}
+
+// setName writes one name; a SET that gets no answer is repeated (the UDP answer may be lost, and a name set twice is the same name).
+func (a *App) setName(ctx context.Context, namer pdu.Namer, c servman.Change) error {
+	var err error
+	for attempt := 1; attempt <= setAttempts; attempt++ {
+		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err = namer.SetOutletName(cctx, c.Outlet, c.Desired)
+		cancel()
+		if err == nil || !errors.Is(err, snmp.ErrTimeout) || attempt == setAttempts {
+			return err
+		}
+		if a.Sleep != nil {
+			_ = a.Sleep(ctx, setRetryWait)
+		} else {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(setRetryWait):
+			}
+		}
+	}
+	return err
 }
 
 // servmanLoop fetches and writes by the intervals of the settings (read again every round, so that a change takes effect at once).

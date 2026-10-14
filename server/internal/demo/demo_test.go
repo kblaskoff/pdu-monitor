@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/app"
 	"github.com/kblaskoff/pdu-monitor/server/internal/demo"
@@ -72,5 +73,37 @@ func TestTheDemoSeedsAndPollsLikeTheRealThing(t *testing.T) {
 	}
 	if again, _ := st.Racks(ctx); len(again) != 4 {
 		t.Fatal("seeded twice")
+	}
+}
+
+func TestSeedIdleHistory(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := store.LoadOrCreateKey(filepath.Join(dir, "k"))
+	sec, _ := store.NewSecrets(key)
+	st, err := store.Open(filepath.Join(dir, "db"), sec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if _, err := demo.Seed(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	if err := demo.SeedIdleHistory(ctx, st, 20, now); err != nil {
+		t.Fatal(err)
+	}
+	hosts, _ := st.Hosts(ctx)
+	hours, _ := st.IdleHours(ctx, hosts[0].ID, now.Add(-30*24*time.Hour), now)
+	if len(hours) < 470 || len(hours) > 481 {
+		t.Fatalf("%d hours", len(hours))
+	}
+	for _, h := range hours {
+		if h.Avg < 1 || h.Avg > 100 || h.Min > h.Avg || h.N != 60 {
+			t.Fatalf("%+v", h)
+		}
+	}
+	if err := demo.SeedIdleHistory(ctx, st, 20, now); err != nil { // twice: the hours are added, the picture does not break
+		t.Fatal(err)
 	}
 }

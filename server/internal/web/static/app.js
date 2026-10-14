@@ -245,6 +245,24 @@ function showLogin(message) {
 }
 
 // ---------------------------------------------------------------- overview
+// Mistakes in servman (two devices on one outlet) are not supposed to exist: they are the first thing on the page, one per line, until
+// servman is right. After a fix, "Check again" compares once more: the list goes, or it says what is still wrong.
+function servmanBanner(sm) {
+  if (!sm || !sm.configured) return null;
+  const when = sm.checkedAt ? ' · checked ' + clock(Math.floor(new Date(sm.checkedAt).getTime() / 1000)) : '';
+  const recheck = isAdmin() ? h('button', { class: 'small', onclick: async (ev) => { ev.target.disabled = true; try { await api('POST', '/api/admin/servman/refresh', {}); } catch (e) { /* the page shows the reason */ } if (S.refresh) S.refresh(); } }, 'Check again') : null;
+  const fix = isAdmin() ? h('a', { href: '#/admin/names' }, 'Names') : null;
+  if (sm.conflicts && sm.conflicts.length) {
+    return h('div', { class: 'notice bad conflicts', role: 'alert' },
+      h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, h('strong', {}, `Servman has ${sm.conflicts.length} conflict${sm.conflicts.length === 1 ? '' : 's'}: two devices on one outlet. Fix them in servman.`), h('div', { class: 'spacer' }), fix, recheck),
+      h('ul', { style: 'margin:8px 0 0;padding-left:20px' }, sm.conflicts.map((c) => h('li', {}, c.text))),
+      h('div', { class: 'small muted', style: 'margin-top:4px' }, 'Nothing is written to those outlets until servman says one thing' + when));
+  }
+  if (sm.error) return h('div', { class: 'notice' }, `Servman could not be read, so its conflicts are not checked: ${sm.error}`, ' ', recheck);
+  if (!sm.checkedAt) return null;
+  return h('div', { class: 'small c-ok', style: 'margin-bottom:10px' }, '✓ Servman has no conflicts' + when);
+}
+
 async function viewOverview() {
   let data;
   const prefs = { list: store('ov.list') === '1', busiest: store('ov.busiest') === '1' };
@@ -289,7 +307,7 @@ async function viewOverview() {
     } else {
       body = h('div', { class: 'cards tiles' }, racks.map(rackTile));
     }
-    mount('overview', h('div', {}, h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', {}, 'Overview'))), stats, controls, body));
+    mount('overview', h('div', {}, servmanBanner(data.servman), h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', {}, 'Overview'))), stats, controls, body));
   }
   const load = async () => { data = await api('GET', '/api/overview'); draw(); };
   await load();
@@ -497,6 +515,8 @@ async function viewHost(id) {
   let data, top = null, topError = null, topLoading = false;
   let windowName = store('host.window') || '6h';
   let showAll = false;
+  let idle = null, idleError = null, idleRange = store('host.idleRange') === '1y' ? '1y' : '14d';
+  const idleRanges = { '14d': '14 days', '1y': '1 year' };
   const windows = { '1h': 'Last hour', '6h': '6 hours', '24h': '24 hours', '7d': '7 days' };
   function draw() {
     const x = data.host;
@@ -578,10 +598,38 @@ async function viewHost(id) {
     }
     const topCard = h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px' }, h('h2', {}, 'Busiest VMs'), tabs), topBody);
 
+    // CPU idle history: one vertical bar per day (14 days) or per week (a year); the server keeps hourly averages
+    const idleTabs = h('div', { class: 'seg' }, Object.keys(idleRanges).map((r) => h('button', { class: r === idleRange ? 'on' : '', onclick: () => { idleRange = r; store('host.idleRange', r); idle = null; idleError = null; draw(); loadIdle(); } }, idleRanges[r])));
+    let idleBody;
+    if (idleError) idleBody = h('p', { class: 'error' }, idleError);
+    else if (!idle) idleBody = h('p', { class: 'muted' }, 'Loading…');
+    else if (!idle.buckets.some((b) => b.n > 0)) idleBody = h('p', { class: 'muted' }, 'No history yet. The server starts to keep it from the first reading it gets from this host.');
+    else {
+      const week = idle.unit === 'week';
+      const when = (b) => new Date(b.t * 1000).toLocaleDateString(undefined, { weekday: week ? undefined : 'short', day: 'numeric', month: 'short', year: week ? 'numeric' : undefined });
+      const cols = idle.buckets.map((b, i) => {
+        const col = h('div', { class: 'col' + (b.avg == null ? ' empty' : ''), title: b.avg == null ? `${week ? 'Week of ' : ''}${when(b)}: no readings` : `${week ? 'Week of ' : ''}${when(b)}\naverage idle ${nf(b.avg, 1)}%\nlowest hour ${nf(b.min, 1)}%\n${b.n} readings` },
+          h('span', { class: 'v' }, b.avg == null ? '' : Math.round(b.avg)));
+        const fill = h('i', { class: b.avg == null ? '' : idleClass(b.avg).replace('c-', '') });
+        fill.style.height = b.avg == null ? '0%' : Math.max(2, b.avg) + '%';
+        col.append(fill);
+        const d = new Date(b.t * 1000);
+        // a label under every bar for days; for weeks only when the month changes, otherwise 53 labels would collide
+        const prev = i ? new Date(idle.buckets[i - 1].t * 1000) : null;
+        const label = week ? (!prev || prev.getMonth() !== d.getMonth() ? d.toLocaleDateString(undefined, { month: 'short' }) : '') : String(d.getDate());
+        col.append(h('em', {}, label));
+        return col;
+      });
+      idleBody = [h('div', { class: 'idlebars' + (week ? ' weeks' : '') }, h('div', { class: 'ticks' }, h('span', {}, '100'), h('span', {}, '50'), h('span', {}, '0')), h('div', { class: 'cols' }, cols)),
+        h('p', { class: 'note' }, (week ? 'Average CPU idle per week (weeks begin on Monday), ' : 'Average CPU idle per day, ') + 'red below 15 %, orange below 40 %. Hover a bar for the lowest hour. ' +
+          (idle.firstData && idle.buckets[0].t < idle.firstData - 86400 ? 'Earlier bars are empty because the server keeps this history only since ' + new Date(idle.firstData * 1000).toLocaleDateString() + '.' : ''))];
+    }
+    const idleCard = h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px' }, h('h2', {}, 'CPU idle %'), idleTabs), idleBody);
+
     const vmCard = x.vmList && x.vmList.length ? h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', { style: 'margin-bottom:8px' }, 'VMs running now'),
       h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'VM'), h('th', { class: 'num' }, 'CPU now (cores)'), h('th', { class: 'num' }, 'Memory (G)'))),
         h('tbody', {}, x.vmList.slice().sort((a, b) => (b.cores || 0) - (a.cores || 0)).map((v) => h('tr', {}, h('td', { class: 'name' }, v.name), h('td', { class: 'num' }, nf(v.cores, 2)), h('td', { class: 'num' }, (v.rss / 2 ** 30).toFixed(1)))))))) : null;
-    mount('hosts', h('div', {}, head, warn, problems, h('div', { class: 'cards pdus', style: 'grid-template-columns:repeat(auto-fit,minmax(280px,1fr))' }, cpuCard, memCard, storCard, powerCard), fsCard, topCard, vmCard));
+    mount('hosts', h('div', {}, head, warn, problems, h('div', { class: 'cards pdus', style: 'grid-template-columns:repeat(auto-fit,minmax(280px,1fr))' }, cpuCard, memCard, storCard, powerCard), fsCard, topCard, idleCard, vmCard));
   }
   const hoursOf = (s) => (s >= 3600 ? (s / 3600).toFixed(1) + ' CPU-h' : Math.round(s / 60) + ' CPU-min');
   async function loadTop() {
@@ -590,10 +638,20 @@ async function viewHost(id) {
     try { top = await api('GET', `/api/hosts/${id}/top?window=${windowName}`); topError = null; } catch (e) { if (!(e instanceof ApiError && e.status === 401)) { topError = e.message; top = null; } } finally { topLoading = false; }
     if (!dialogOpen()) draw();
   }
+  async function loadIdle() {
+    const asked = idleRange;
+    try {
+      const r = await api('GET', `/api/hosts/${id}/idle?range=${asked}&tz=${new Date().getTimezoneOffset()}`);
+      if (asked !== idleRange) return; // the person switched meanwhile
+      idle = r; idleError = null;
+    } catch (e) { if (!(e instanceof ApiError && e.status === 401)) { idleError = e.message; idle = null; } }
+    if (!dialogOpen()) draw();
+  }
   const load = async () => { data = await api('GET', '/api/hosts/' + id); draw(); };
   await load();
   loadTop();
-  startPolling(() => load().then(loadTop).catch(() => {}));
+  loadIdle();
+  startPolling(() => load().then(loadTop).then(loadIdle).catch(() => {}));
 }
 
 // ---------------------------------------------------------------- settings (administrators)
@@ -774,8 +832,8 @@ function adminSettings(body, cfg, reload) {
     field('Warn at (%)', warn, 'Of the limit; above it a rack or PDU is shown as high.'), field('Restart pause (s)', delay, 'Between switching off and on again (5–10 is usual).'),
     field('Keep history (days)', keep),
     h('h3', { style: 'margin:18px 0 4px' }, 'Names of the outlets (from servman)'),
-    field('Ask servman every (min)', smPoll, 'Compares servman with the PDUs and shows the plan under Names. 0 = never by itself.'),
-    field('Write to the PDUs every (min)', smSync, 'Writes the planned names to the PDUs by itself (at most 100 outlets a round). 0 = only when you press the button under Names.'),
+    field('Ask servman every (min)', smPoll, 'Compares servman with the PDUs, shows the plan under Names and the conflicts on the overview. 0 = never by itself.'),
+    field('Write to the PDUs every (min)', smSync, 'Writes the planned names to the PDUs by itself. 0 = only when you press the button under Names.'),
     field('Outlet name', smFormat, 'What an outlet is called. Both forms join the two PDUs of a server and the host by the rack unit id.'),
     h('div', { class: 'actionbar' }, save, saved)));
 }
@@ -792,11 +850,11 @@ async function adminNames(body) {
     busy = false; draw();
   }
   async function write(sel, what, count) {
-    const list = h('ul', {}, (sel.changes || []).slice(0, 10).map((c) => h('li', {}, `${c.pdu} outlet ${c.outlet}: ${c.current || '—'} → ${c.desired}`)), (sel.changes || []).length > 10 ? h('li', { class: 'muted' }, `… and ${sel.changes.length - 10} more`) : null);
+    const list = h('ul', {}, (sel.changes || []).filter(Boolean).slice(0, 10).map((c) => h('li', {}, `${c.pdu} outlet ${c.outlet}: ${c.current || '—'} → ${c.desired}`)), (sel.changes || []).length > 10 ? h('li', { class: 'muted' }, `… and ${sel.changes.length - 10} more`) : null);
     const ok = await confirmDialog(`Write ${count} outlet name${count === 1 ? '' : 's'}?`, h('div', {}, h('div', {}, what), list,
       h('div', { class: 'effect' }, 'The names are written to the PDUs (SNMP). The PDUs are read again afterwards and the names are compared with what was meant; every writing is in the log.')), 'Write', false);
     if (!ok) return;
-    try { st = await api('POST', '/api/admin/servman/apply', { all: !!sel.all, pdu: sel.pdu || '', outlet: sel.outlet || 0, confirm: true }); } catch (e) { setBanner({ title: 'Not written', error: e.message, running: false }); return; }
+    try { st = await api('POST', '/api/admin/servman/apply', { all: !!sel.all, pdu: sel.pdu || '', outlet: sel.outlet || 0, outlets: sel.outlets || [], confirm: true }); } catch (e) { setBanner({ title: 'Not written', error: e.message, running: false }); return; }
     draw();
   }
   function draw() {
@@ -823,8 +881,21 @@ async function adminNames(body) {
       st.planError ? h('p', { class: 'error', style: 'margin:10px 0 0' }, st.planError) : null,
       st.resultError ? h('p', { class: 'error', style: 'margin:10px 0 0' }, st.resultError) : null,
       plan ? h('p', { class: 'note' }, `${plan.devices} devices of servman have cables · ${plan.unchanged} outlets already have the right name · ${changes.length} to change · name form: ${plan.format === 'ccid_name' ? 'id and machine name' : 'rack unit id'}`) : null);
-    const failed = st.result && st.result.failed && st.result.failed.length ? h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h3', {}, 'Not written'),
-      h('ul', {}, st.result.failed.map((f) => h('li', {}, h('span', { class: 'error' }, `${f.pdu} outlet ${f.outlet} → ${f.desired}: `), f.error)))) : null;
+    // what failed the last time: the ones that are still different now can be tried again; the others got their name after all
+    const pending = new Set(changes.map((c) => c.pdu + '#' + c.outlet));
+    const lastFailed = st.result && st.result.failed ? st.result.failed : [];
+    const stillFailed = lastFailed.filter((f) => pending.has(f.pdu + '#' + f.outlet));
+    const retryable = stillFailed.filter((f) => !(changes.find((c) => c.pdu === f.pdu && c.outlet === f.outlet) || {}).blocked);
+    const failed = stillFailed.length ? h('div', { class: 'card', style: 'margin-bottom:14px' },
+      h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, h('h3', {}, `Not written (${stillFailed.length})`), h('div', { class: 'spacer' }),
+        h('button', { class: 'primary', disabled: busy || st.writing || !retryable.length, onclick: () => write({ outlets: retryable.map((f) => ({ pdu: f.pdu, outlet: f.outlet })), changes: retryable.map((f) => changes.find((c) => c.pdu === f.pdu && c.outlet === f.outlet)) }, 'Trying these again:', retryable.length) }, `Try again (${retryable.length})`)),
+      h('ul', {}, stillFailed.map((f) => h('li', {}, h('span', { class: 'error' }, `${f.pdu} outlet ${f.outlet} → ${f.desired}: `), f.error))),
+      lastFailed.length > stillFailed.length ? h('p', { class: 'note' }, `${lastFailed.length - stillFailed.length} more failed to answer but have the right name now.`) : null) : null;
+    const conflicts = plan && plan.conflicts && plan.conflicts.length ? h('div', { class: 'notice bad conflicts', role: 'alert', style: 'margin-bottom:14px' },
+      h('strong', {}, `${plan.conflicts.length} conflict${plan.conflicts.length === 1 ? '' : 's'} in servman: two devices on one outlet. Fix them in servman, then press "Compare now".`),
+      h('ul', { style: 'margin:8px 0 0;padding-left:20px' }, plan.conflicts.map((c) => h('li', {}, c.text))),
+      h('div', { class: 'small muted', style: 'margin-top:4px' }, 'Nothing is written to those outlets. The overview shows this list to everybody until it is empty.')) : null;
+    const clean = plan && !(plan.conflicts && plan.conflicts.length) ? h('p', { class: 'c-ok', style: 'margin:0 0 12px' }, '✓ No conflicts: every outlet of servman has one device.') : null;
     const table = changes.length ? h('div', { class: 'tablewrap', style: 'margin-bottom:14px' }, h('table', {}, h('thead', {}, h('tr', {}, ['PDU', 'Outlet', 'Now', 'Will be', 'Server', ''].map((t) => h('th', {}, t)), h('th'))),
       h('tbody', {}, Object.keys(groups).sort().flatMap((pduName) => {
         const g = groups[pduName], rdy = g.filter((c) => !c.blocked);
@@ -839,7 +910,7 @@ async function adminNames(body) {
       h('ul', {}, plan.warnings.slice(0, 50).map((w) => h('li', {}, w.text))), plan.warnings.length > 50 ? h('p', { class: 'muted small' }, `… and ${plan.warnings.length - 50} more`) : null) : null;
     const unmapped = plan && plan.unmapped.length ? h('details', { class: 'card' }, h('summary', {}, `${plan.unmapped.length} outlets have a name that servman does not know (never changed)`),
       h('p', { class: 'muted small' }, plan.unmapped.slice(0, 200).map((u) => `${u.pdu} #${u.outlet}: ${u.name}`).join('   ·   '))) : null;
-    body.replaceChildren(...[head, failed, table, warnings, unmapped].filter(Boolean));
+    body.replaceChildren(...[head, conflicts, clean, failed, table, warnings, unmapped].filter(Boolean));
   }
   draw();
   // while it writes the page follows the progress

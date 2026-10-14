@@ -172,6 +172,9 @@ func serve(args []string) error {
 			return err
 		}
 		demoLab = lab
+		if err := demo.SeedIdleHistory(ctx, st, 400, time.Now()); err != nil {
+			return err
+		}
 		authn, factory, runner = demoAuth{}, lab.Factory, lab.Runner()
 		keys = demo.Keys{}
 		logger.Print("DEMO MODE: sample data only; log in as demo / demo (admin), operator / operator, viewer / viewer")

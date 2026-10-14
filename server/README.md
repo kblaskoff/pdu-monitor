@@ -160,6 +160,10 @@ Settings → Hosts shows the install command with the key of this server (the sa
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host and paste it to confirm. Without that confirmation nothing is read:
 this is what stops somebody on the network from pretending to be a hypervisor.
 
+The page of a host shows **CPU idle %** per day for the last 14 days and per week for the last year. The server builds it from the readings
+it already takes (hourly averages in its database, about 9,000 small rows per host and year, kept 400 days), so it costs the hosts nothing
+and the history starts on the day the server was updated.
+
 ## Collector
 
 `pdu-collector` runs where the hypervisors can be reached (it can also run on the same machine as the server).
@@ -211,9 +215,9 @@ number that the PDU does not have, a PDU that was not read. Outlets that have a 
 a confirmation, runs in the background, reads the PDU again and compares: a PDU that says "ok" and still shows the old name is reported.
 The log (*Settings → Log*) has a line per PDU: who, which outlets, from what to what. A PDU without a write community is shown but not written.
 
-**By itself** (*Settings → Settings*): *Ask servman every … min* (default 60, 0 = never) makes the plan; *Write to the PDUs every … min*
-(default **0 = off**) writes it, at most 100 outlets a round (a big difference is written over several rounds, so that the first round is not a
-flood of changes). *Outlet name* is `200U13` or `200U13 a42sf` (the machine name; cut to fit the 20 characters of an APC outlet name). With
+**By itself** (*Settings → Settings*): *Ask servman every … min* (default 15, 0 = never) makes the plan; *Write to the PDUs every … min*
+(default **0 = off**) writes it, everything that differs, as many outlets as there are (the first round of a new installation writes it all).
+*Outlet name* is `200U13` or `200U13 a42sf` (the machine name; cut to fit the 20 characters of an APC outlet name). With
 both forms the two PDUs of a server are one line and a host is joined by the id: the id alone identifies the server.
 
 What is written is the *Config* name object of the MIB (read-write; the object that is read is a read-only copy): CyberPower ePDU2

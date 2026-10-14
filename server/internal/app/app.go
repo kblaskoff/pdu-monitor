@@ -83,6 +83,8 @@ type App struct {
 	lastApply    *NameResult
 	lastApplyErr string
 
+	idle *idleKeeper
+
 	mu       sync.Mutex
 	readings map[int64]Reading
 	drivers  map[int64]*cachedDriver
@@ -98,8 +100,12 @@ type cachedDriver struct {
 }
 
 func New(s *store.Store, hosts *hostinfo.Poller, factory DriverFactory) *App {
-	return &App{Store: s, Hosts: hosts, Factory: factory, Now: time.Now, readings: map[int64]Reading{}, drivers: map[int64]*cachedDriver{},
-		lastSave: map[int64]time.Time{}, ops: map[string]*Operation{}, busy: map[pdu.Target]string{}}
+	a := &App{Store: s, Hosts: hosts, Factory: factory, Now: time.Now, readings: map[int64]Reading{}, drivers: map[int64]*cachedDriver{},
+		lastSave: map[int64]time.Time{}, ops: map[string]*Operation{}, busy: map[pdu.Target]string{}, idle: newIdleKeeper()}
+	if hosts != nil {
+		hosts.OnStatus = a.recordIdle
+	}
+	return a
 }
 
 func (a *App) logf(format string, args ...any) {
@@ -210,6 +216,7 @@ func (a *App) pollOne(ctx context.Context, p store.PDU) Reading {
 
 // Run polls the PDUs, the hosts and prunes the history until the context ends.
 func (a *App) Run(ctx context.Context) {
+	go a.idleLoop(ctx)
 	if a.Servman != nil {
 		go a.servmanLoop(ctx)
 	}
@@ -236,6 +243,9 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) pruneHistory(ctx context.Context) {
+	if _, err := a.Store.PruneIdle(ctx, a.Now().Add(-idleKeepDays*24*time.Hour)); err != nil {
+		a.logf("prune idle: %v", err)
+	}
 	st, _ := a.Store.Settings(ctx)
 	if n, err := a.Store.PruneSamples(ctx, a.Now().Add(-time.Duration(st.SampleRetentionDay)*24*time.Hour)); err != nil {
 		a.logf("prune: %v", err)

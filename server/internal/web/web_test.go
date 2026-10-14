@@ -219,6 +219,16 @@ func TestSecurityHeadersAndTheStaticPage(t *testing.T) {
 			t.Errorf("%s with an old tag: %d", path, other.StatusCode)
 		}
 	}
+	// the page names its script and style with a version, so that a new program is never shown with an old script
+	_, page := e.anonymous().raw("GET", "/", nil, nil)
+	js, _ := e.anonymous().raw("GET", "/static/app.js", nil, nil)
+	css, _ := e.anonymous().raw("GET", "/static/style.css", nil, nil)
+	if !strings.Contains(string(page), `/static/app.js?v=`+strings.Trim(js.Header.Get("ETag"), `"`)+`"`) || !strings.Contains(string(page), `/static/style.css?v=`+strings.Trim(css.Header.Get("ETag"), `"`)+`"`) {
+		t.Errorf("the page does not carry the versions: %s", page)
+	}
+	if resp, _ := e.anonymous().raw("GET", "/static/app.js?v=anything", nil, nil); resp.StatusCode != 200 {
+		t.Errorf("a script with a version in its address: %d", resp.StatusCode)
+	}
 	for path, kind := range map[string]string{"/static/app.js": "javascript", "/static/style.css": "css"} {
 		resp, body := e.anonymous().raw("GET", path, nil, nil)
 		if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("Content-Type"), kind) || len(body) < 100 {

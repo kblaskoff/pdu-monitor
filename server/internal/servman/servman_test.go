@@ -216,16 +216,32 @@ func TestPlanDoesNotGuess(t *testing.T) {
 	for _, w := range p.Warnings {
 		kinds[w.Kind]++
 	}
-	if kinds["conflict"] != 1 || kinds["out-of-range"] != 1 || kinds["unknown-pdu"] != 1 || kinds["not-read"] != 1 || len(p.Warnings) != 4 {
+	if kinds["out-of-range"] != 1 || kinds["unknown-pdu"] != 1 || kinds["not-read"] != 1 || len(p.Warnings) != 3 {
 		t.Errorf("%+v", p.Warnings)
+	}
+	if len(p.Conflicts) != 1 || p.Conflicts[0].PDU != "P200A" || p.Conflicts[0].Outlet != 3 || strings.Join(p.Conflicts[0].Devices, ",") != "200U13,200U14" ||
+		p.Conflicts[0].Text != "P200A outlet 3: servman puts 200U13 and 200U14 there" {
+		t.Errorf("%+v", p.Conflicts)
 	}
 }
 
 func TestPlanThreeDevicesOnOneOutletIsOneConflict(t *testing.T) {
 	devs := []Device{{ID: 1, CCID: "a1", Ports: []Port{{"P1", 1}}}, {ID: 2, CCID: "a2", Ports: []Port{{"P1", 1}}}, {ID: 3, CCID: "a3", Ports: []Port{{"P1", 1}}}}
 	p := Build(devs, []PDUInfo{pduInfo(1, "P1", 4, nil)}, FormatCCID, now)
-	if len(p.Changes) != 0 || len(p.Warnings) != 1 {
+	if len(p.Changes) != 0 || len(p.Warnings) != 0 || len(p.Conflicts) != 1 || strings.Join(p.Conflicts[0].Devices, ",") != "a1,a2,a3" ||
+		p.Conflicts[0].Text != "P1 outlet 1: servman puts a1 and a2 and a3 there" {
 		t.Errorf("%+v", p)
+	}
+	// conflicts come in a fixed order, whatever the order of servman's answer, and the same device listed twice is no conflict
+	devs = []Device{{ID: 1, CCID: "z", Ports: []Port{{"P2", 1}}}, {ID: 2, CCID: "y", Ports: []Port{{"P2", 1}}}, {ID: 3, CCID: "x", Ports: []Port{{"P1", 3}, {"P1", 2}}},
+		{ID: 4, CCID: "w", Ports: []Port{{"P1", 2}}}, {ID: 5, CCID: "x", Ports: []Port{{"P1", 3}}}}
+	p = Build(devs, []PDUInfo{pduInfo(1, "P1", 4, nil), pduInfo(2, "P2", 4, nil)}, FormatCCID, now)
+	var got []string
+	for _, c := range p.Conflicts {
+		got = append(got, c.Text)
+	}
+	if strings.Join(got, " | ") != "P1 outlet 2: servman puts w and x there | P2 outlet 1: servman puts y and z there" {
+		t.Errorf("%q", got)
 	}
 }
 

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kblaskoff/pdu-monitor/server/internal/app"
 	"github.com/kblaskoff/pdu-monitor/server/internal/pdu"
 	"github.com/kblaskoff/pdu-monitor/server/internal/servman"
+	"github.com/kblaskoff/pdu-monitor/server/internal/snmp"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
 )
 
@@ -180,9 +182,11 @@ func TestPDUWithoutWriteCommunityIsNotWrittenTo(t *testing.T) {
 // namerFault makes writing names fail or lie
 type namerFault struct {
 	*pdu.Simulated
-	fail map[int]bool
-	lie  bool
-	hold chan struct{}
+	fail     map[int]bool
+	lie      bool
+	hold     chan struct{}
+	timeouts *int32 // the first N writings get no answer (counted down), then it works
+	lateAck  bool   // the name is written but the answer is lost
 }
 
 func (f namerFault) SetOutletName(ctx context.Context, n int, name string) error {
@@ -191,6 +195,13 @@ func (f namerFault) SetOutletName(ctx context.Context, n int, name string) error
 	}
 	if f.fail[n] {
 		return errors.New("timeout")
+	}
+	if f.lateAck {
+		_ = f.Simulated.SetOutletName(ctx, n, name)
+		return snmp.ErrTimeout
+	}
+	if f.timeouts != nil && atomic.AddInt32(f.timeouts, -1) >= 0 {
+		return snmp.ErrTimeout
 	}
 	if f.lie {
 		return nil // "ok", and nothing changes
@@ -282,7 +293,7 @@ func TestOnlyOneWritingAtATime(t *testing.T) {
 	}
 }
 
-func TestTheAutomaticSyncWritesALimitedNumberPerRound(t *testing.T) {
+func TestTheAutomaticSyncWritesEverythingInOneRound(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	var devs []servman.Device
@@ -303,11 +314,10 @@ func TestTheAutomaticSyncWritesALimitedNumberPerRound(t *testing.T) {
 	e.app.Servman = &fakeServman{devices: devs}
 	e.app.PollPDUs(ctx)
 	res, err := e.app.ApplyNames(ctx, "servman-sync", app.NameSelection{All: true}, true)
-	if err != nil || res.Written != 100 || res.Skipped != 20 {
+	if err != nil || res.Written != 120 || res.Verified != 120 || res.Skipped != 0 || len(res.Failed) != 0 { // no limit: a first sync writes it all
 		t.Fatalf("%v %+v", err, res)
 	}
-	res, _ = e.app.ApplyNames(ctx, "servman-sync", app.NameSelection{All: true}, true) // the next round writes the rest
-	if res.Written != 20 || res.Skipped != 0 {
+	if res, _ = e.app.ApplyNames(ctx, "servman-sync", app.NameSelection{All: true}, true); res.Written != 0 {
 		t.Errorf("%+v", res)
 	}
 }
@@ -357,4 +367,61 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("it did not happen")
+}
+
+func TestASetWithoutAnswerIsRepeatedAndLostAnswersAreRecognised(t *testing.T) {
+	// the first two writings get no answer, the third works
+	n := int32(2)
+	e, _ := faultyEnv(t, func(s *pdu.Simulated) pdu.Driver { return namerFault{Simulated: s, timeouts: &n} })
+	res, err := e.app.ApplyNames(context.Background(), "anna", app.NameSelection{All: true}, false)
+	if err != nil || res.Written != 2 || res.Verified != 2 || len(res.Failed) != 0 {
+		t.Fatalf("repeated: %v %+v", err, res)
+	}
+	// the PDU keeps the name but the answer never comes: after the attempts the PDU is read and the name is found
+	e, _ = faultyEnv(t, func(s *pdu.Simulated) pdu.Driver { return namerFault{Simulated: s, lateAck: true} })
+	res, err = e.app.ApplyNames(context.Background(), "anna", app.NameSelection{All: true}, false)
+	if err != nil || res.Written != 2 || res.Verified != 2 || len(res.Failed) != 0 {
+		t.Fatalf("late answer: %v %+v", err, res)
+	}
+	if names(t, e, e.a.ID)[14] != "200U13" {
+		t.Error("the name is not on the PDU")
+	}
+	if log := auditActions(t, e, "outlet.names"); len(log) != 2 || !strings.Contains(log[0].Detail+log[1].Detail, "the answer was lost") || !log[0].OK {
+		t.Errorf("%+v", log)
+	}
+	// a PDU that never answers and has not the name is a failure, not a success
+	n2 := int32(1000)
+	e, _ = faultyEnv(t, func(s *pdu.Simulated) pdu.Driver { return namerFault{Simulated: s, timeouts: &n2} })
+	res, _ = e.app.ApplyNames(context.Background(), "anna", app.NameSelection{All: true}, false)
+	if res.Written != 0 || len(res.Failed) != 2 || !strings.Contains(res.Failed[0].Error, "no answer") {
+		t.Errorf("never answers: %+v", res)
+	}
+}
+
+func TestFailedOutletsCanBeTriedAgainByList(t *testing.T) {
+	n := int32(1000) // everything fails at first
+	e, _ := faultyEnv(t, func(s *pdu.Simulated) pdu.Driver { return namerFault{Simulated: s, timeouts: &n} })
+	ctx := context.Background()
+	res, _ := e.app.ApplyNames(ctx, "anna", app.NameSelection{All: true}, false)
+	if len(res.Failed) != 2 {
+		t.Fatalf("%+v", res)
+	}
+	atomic.StoreInt32(&n, 0) // the PDUs recover
+	var again []app.NameRef
+	for _, f := range res.Failed {
+		again = append(again, app.NameRef{PDU: f.PDU, Outlet: f.Outlet})
+	}
+	res, err := e.app.ApplyNames(ctx, "anna", app.NameSelection{Only: again[:1]}, false) // only the first one is tried again
+	if err != nil || res.Written != 1 || res.Verified != 1 {
+		t.Fatalf("%v %+v", err, res)
+	}
+	if plan := e.app.ServmanStatus().Plan; len(plan.Changes) != 1 {
+		t.Errorf("one is left: %+v", plan.Changes)
+	}
+	if res, _ = e.app.ApplyNames(ctx, "anna", app.NameSelection{Only: again[1:]}, false); res.Written != 1 {
+		t.Errorf("%+v", res)
+	}
+	if _, err := e.app.ApplyNames(ctx, "anna", app.NameSelection{Only: []app.NameRef{}}, false); err == nil {
+		t.Error("an empty list is not a choice")
+	}
 }

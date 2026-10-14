@@ -39,6 +39,10 @@ var migrations = []string{
 	 CREATE TABLE pdu_samples (pdu_id INTEGER NOT NULL REFERENCES pdus(id) ON DELETE CASCADE, ts INTEGER NOT NULL, amps REAL, watts REAL, PRIMARY KEY (pdu_id, ts));`,
 	// 2: hosts can be read by a collector (a separate process that pushes the readings) instead of by this server
 	`ALTER TABLE hosts ADD COLUMN collector TEXT NOT NULL DEFAULT '';`,
+	// 3: the CPU idle of the hosts, one row per host and hour (sum and count of the minute readings, and the lowest reading): a year of 20
+	// hosts is about 175 000 rows. Kept on the server, so that it does not depend on how long an agent keeps its own files.
+	`CREATE TABLE host_idle (host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, hour INTEGER NOT NULL,
+		sum REAL NOT NULL, n INTEGER NOT NULL, min REAL NOT NULL, PRIMARY KEY (host_id, hour));`,
 }
 
 // Open opens (and creates) the database file. secrets may be nil only in tests that never store communities.
@@ -519,7 +523,7 @@ const (
 
 func DefaultSettings() Settings {
 	return Settings{PollSeconds: 10, HostPollSeconds: 60, WarnPercent: 80, RestartDelaySecond: 8, SampleRetentionDay: 90,
-		ServmanPollMinutes: 60, ServmanSyncMinutes: 0, ServmanNameFormat: NameCCID}
+		ServmanPollMinutes: 15, ServmanSyncMinutes: 0, ServmanNameFormat: NameCCID}
 }
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {

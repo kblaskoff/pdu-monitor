@@ -41,9 +41,18 @@ type Change struct {
 	Note    string `json:"note,omitempty"`
 }
 
+// Conflict is a mistake in servman: two or more devices are plugged into the same outlet. Nothing is written for that outlet until
+// servman says one thing. Conflicts are not supposed to exist: the screen shows them first, until none is left.
+type Conflict struct {
+	PDU     string   `json:"pdu"`
+	Outlet  int      `json:"outlet"`
+	Devices []string `json:"devices"` // the ccids, sorted
+	Text    string   `json:"text"`
+}
+
 // Warning is something in servman or on a PDU that does not fit; nothing is written for it.
 type Warning struct {
-	Kind   string `json:"kind"` // unknown-pdu, conflict, out-of-range, bad-name, not-read
+	Kind   string `json:"kind"` // unknown-pdu, out-of-range, bad-name, not-read
 	PDU    string `json:"pdu,omitempty"`
 	Outlet int    `json:"outlet,omitempty"`
 	Text   string `json:"text"`
@@ -63,6 +72,7 @@ type Plan struct {
 	Devices   int        `json:"devices"`   // devices of servman with at least one PDU port
 	Unchanged int        `json:"unchanged"` // outlets that already have the right name
 	Changes   []Change   `json:"changes"`
+	Conflicts []Conflict `json:"conflicts"`
 	Warnings  []Warning  `json:"warnings"`
 	Unmapped  []Unmapped `json:"unmapped"`
 }
@@ -73,8 +83,8 @@ type slot struct {
 }
 
 type claim struct {
-	dev      Device
-	conflict bool
+	dev  Device
+	also map[string]bool // the ccids of the other devices that claim the same outlet
 }
 
 // OutletName is the name an outlet gets for a device in a format. The second result says that the machine name had to be cut (or left out) to fit.
@@ -121,7 +131,7 @@ func Build(devices []Device, pdus []PDUInfo, format string, now time.Time) Plan 
 	if format != FormatCCIDName {
 		format = FormatCCID
 	}
-	plan := Plan{Time: now, Format: format, Changes: []Change{}, Warnings: []Warning{}, Unmapped: []Unmapped{}}
+	plan := Plan{Time: now, Format: format, Changes: []Change{}, Conflicts: []Conflict{}, Warnings: []Warning{}, Unmapped: []Unmapped{}}
 	byName := map[string]PDUInfo{}
 	for _, p := range pdus {
 		byName[strings.ToLower(strings.TrimSpace(p.Name))] = p
@@ -147,16 +157,36 @@ func Build(devices []Device, pdus []PDUInfo, format string, now time.Time) Plan 
 			}
 			seen[s] = true
 			if c, taken := claims[s]; taken {
-				if !c.conflict {
-					plan.Warnings = append(plan.Warnings, Warning{Kind: "conflict", PDU: p.Name, Outlet: port.Port,
-						Text: fmt.Sprintf("servman puts both %s and %s on %s outlet %d: nothing is written there", c.dev.CCID, d.CCID, p.Name, port.Port)})
+				if c.dev.CCID != d.CCID { // the same id twice is the same device listed twice
+					if c.also == nil {
+						c.also = map[string]bool{}
+					}
+					c.also[d.CCID] = true
 				}
-				c.conflict = true
 				continue
 			}
 			claims[s] = &claim{dev: d}
 		}
 	}
+	for s, c := range claims {
+		if len(c.also) == 0 {
+			continue
+		}
+		ids := []string{c.dev.CCID}
+		for id := range c.also {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		plan.Conflicts = append(plan.Conflicts, Conflict{PDU: s.pdu, Outlet: s.outlet, Devices: ids,
+			Text: fmt.Sprintf("%s outlet %d: servman puts %s there", s.pdu, s.outlet, strings.Join(ids, " and "))})
+	}
+	sort.Slice(plan.Conflicts, func(i, j int) bool {
+		a, b := plan.Conflicts[i], plan.Conflicts[j]
+		if a.PDU != b.PDU {
+			return a.PDU < b.PDU
+		}
+		return a.Outlet < b.Outlet
+	})
 	names := make([]string, 0, len(unknown))
 	for n := range unknown {
 		names = append(names, n)
@@ -185,7 +215,7 @@ func Build(devices []Device, pdus []PDUInfo, format string, now time.Time) Plan 
 		for _, s := range slots {
 			c := claims[s]
 			mapped[s] = true
-			if c.conflict {
+			if len(c.also) > 0 { // a conflict: reported, never written
 				continue
 			}
 			current, exists := p.Outlets[s.outlet]

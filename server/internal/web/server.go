@@ -2,6 +2,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -25,6 +26,27 @@ import (
 
 //go:embed static
 var staticFiles embed.FS
+
+// indexPage is index.html with a version in the addresses of the script and the style (…/app.js?v=3fa9…): a new program has new addresses, so a
+// browser can not show the old script with a new page, whatever it kept before. Made once when the program starts.
+var indexPage = func() []byte {
+	data, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		return nil
+	}
+	page := string(data)
+	for _, file := range []string{"app.js", "style.css"} {
+		if tag, ok := staticTags[file]; ok {
+			page = strings.Replace(page, `/static/`+file+`"`, `/static/`+file+`?v=`+strings.Trim(tag, `"`)+`"`, 1)
+		}
+	}
+	return []byte(page)
+}()
+
+var indexTag = func() string {
+	sum := sha256.Sum256(indexPage)
+	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}()
 
 // staticTags is the ETag of every embedded file (a hash of its content), made once when the program starts.
 var staticTags = func() map[string]string {
@@ -107,6 +129,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/pdus/{id}/history", s.api(auth.RoleViewer, s.handlePDUHistory))
 	mux.HandleFunc("GET /api/hosts", s.api(auth.RoleViewer, s.handleHosts))
 	mux.HandleFunc("GET /api/hosts/{id}", s.api(auth.RoleViewer, s.handleHost))
+	mux.HandleFunc("GET /api/hosts/{id}/idle", s.api(auth.RoleViewer, s.handleHostIdle))
 	mux.HandleFunc("GET /api/hosts/{id}/top", s.api(auth.RoleViewer, s.handleTop))
 	mux.HandleFunc("POST /api/power", s.api(auth.RoleOperator, s.handlePower))
 	mux.HandleFunc("GET /api/ops", s.api(auth.RoleViewer, s.handleOps))
@@ -156,10 +179,15 @@ func (s *Server) Handler() http.Handler {
 		if name == "" {
 			name = "index.html"
 		}
+		w.Header().Set("Cache-Control", "no-cache")
+		if name == "index.html" && len(indexPage) > 0 {
+			w.Header().Set("ETag", indexTag)
+			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(indexPage))
+			return
+		}
 		if tag, ok := staticTags[name]; ok {
 			w.Header().Set("ETag", tag)
 		}
-		w.Header().Set("Cache-Control", "no-cache")
 		files.ServeHTTP(w, r)
 	}))
 	return s.secure(mux)

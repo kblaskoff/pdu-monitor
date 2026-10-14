@@ -58,8 +58,11 @@ func TestServmanPlanAndApply(t *testing.T) {
 	}
 	plan := obj(out["plan"])
 	changes := list(plan["changes"])
-	if len(changes) != 3 || len(list(plan["warnings"])) != 2 {
+	if len(changes) != 3 || len(list(plan["warnings"])) != 1 || len(list(plan["conflicts"])) != 1 {
 		t.Fatalf("%v", plan)
+	}
+	if c := obj(list(plan["conflicts"])[0]); c["pdu"] != "P10FA" || c["outlet"] != float64(20) || c["text"] != "P10FA outlet 20: servman puts 10FU40 and 10FU41 there" {
+		t.Errorf("%v", c)
 	}
 	first := obj(changes[0])
 	if first["pdu"] != "P100A" || first["outlet"] != float64(20) || first["desired"] != "100U50" || first["kind"] != "fill" {
@@ -157,4 +160,57 @@ func TestSettingsOfServmanAndOldPagesDoNotUndoThem(t *testing.T) {
 func jsonOf(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// every user sees the conflicts at the top of the overview; the numbers of an administrator are not needed for that
+func TestOverviewShowsTheConflictsOfServman(t *testing.T) {
+	e := newEnv(t)
+	vera := e.login("vera")
+	_, ov := vera.call("GET", "/api/overview", nil)
+	if sm := obj(ov["servman"]); sm["configured"] != false || len(list(sm["conflicts"])) != 0 {
+		t.Errorf("not configured: %v", sm)
+	}
+	e.app.Servman = e.lab.Servman()
+	_, ov = vera.call("GET", "/api/overview", nil)
+	if sm := obj(ov["servman"]); sm["configured"] != true || len(list(sm["conflicts"])) != 0 || sm["checkedAt"] != nil {
+		t.Errorf("configured, not compared yet: %v", sm)
+	}
+	e.login("anna").call("POST", "/api/admin/servman/refresh", map[string]any{})
+	_, ov = vera.call("GET", "/api/overview", nil)
+	sm := obj(ov["servman"])
+	cs := list(sm["conflicts"])
+	if len(cs) != 1 || obj(cs[0])["text"] != "P10FA outlet 20: servman puts 10FU40 and 10FU41 there" || sm["checkedAt"] == nil {
+		t.Errorf("%v", sm)
+	}
+}
+
+func TestApplyAListOfOutlets(t *testing.T) {
+	e := newEnv(t)
+	e.app.Servman = e.lab.Servman()
+	admin := e.login("anna")
+	admin.call("POST", "/api/admin/servman/refresh", map[string]any{})
+	for _, bad := range []map[string]any{
+		{"outlets": []map[string]any{{"pdu": "", "outlet": 1}}, "confirm": true},
+		{"outlets": []map[string]any{{"pdu": "P100A", "outlet": 0}}, "confirm": true},
+		{"outlets": []map[string]any{{"pdu": "P100A", "outlet": 500}}, "confirm": true},
+	} {
+		if status, _ := admin.call("POST", "/api/admin/servman/apply", bad); status != 400 {
+			t.Errorf("%v: %d", bad, status)
+		}
+	}
+	status, _ := admin.call("POST", "/api/admin/servman/apply", map[string]any{"outlets": []map[string]any{{"pdu": "P100A", "outlet": 20}, {"pdu": "P200A", "outlet": 13}}, "confirm": true})
+	if status != 202 {
+		t.Fatalf("%d", status)
+	}
+	var st map[string]any
+	for i := 0; i < 300; i++ {
+		_, st = admin.call("GET", "/api/admin/servman", nil)
+		if st["writing"] == false && st["result"] != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if res := obj(st["result"]); res["written"] != float64(2) || res["verified"] != float64(2) || len(list(obj(st["plan"])["changes"])) != 1 {
+		t.Errorf("%v", st)
+	}
 }
