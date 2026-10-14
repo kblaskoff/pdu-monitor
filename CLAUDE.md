@@ -22,8 +22,11 @@ Three parts in one repository:
 
 ## Architecture and decisions (do not undo without asking the owner)
 
-* **Words (the owner's, use them in answers):** the **central server** is the machine where `pdumonitord` (the web interface) runs; a **collector** is a machine where
-  `pdu-collector` runs; a **host** is a hypervisor that an agent samples. "Server" alone is ambiguous: do not use it.
+* **Words (the owner's, use them in answers):** the **central server** is the machine where `pdumonitord` (the web interface) runs. The owner calls the
+  hypervisors that run the agent **hosts, and also "collectors"** ("they collect the data, the central one takes it from them"): the machines that are
+  read directly (`a40sf`, `kvmsfc7`, ...). The separate program `pdu-collector` (a passive relay between hosts and the central server, built for hosts that the
+  central server cannot reach) is a different thing: say "pdu-collector" for it, never "collector" alone, and do not assume it is deployed anywhere
+  (it was not confirmed). The things on the hosts are updated by `hostinfo-update` (nightly; `hostinfo-update --force` at once), not by the Software tab.
 
 * **Central Linux server with a web UI** (Ubuntu 22, Go, one binary `pdumonitord`), 5-15 users, internal network and VPN only.
   Chosen over native apps. The Mac app stays for now; the server can import its settings file (Settings -> Import).
