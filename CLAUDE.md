@@ -16,7 +16,7 @@ Three parts in one repository:
 | Part | Where | Language | State |
 |---|---|---|---|
 | **Server** (web UI with its login, API, PDU polling) | `server/` (module `github.com/kblaskoff/pdu-monitor/server`) | Go | the main product; installed on the owner's server from a clone, the LDAP login works against the real directory; not yet tried against real PDUs |
-| **Host agent** (samples a hypervisor once a minute) | `hostagent/` | Python stdlib, must stay 3.6-compatible (AlmaLinux 8 hosts) | running on real hypervisors: ZFS (Debian 13), LVM (AlmaLinux 8); agent 0.2.0 adds LVM + filesystems |
+| **Host agent** (samples a hypervisor once a minute) | `hostagent/` | Python stdlib, must stay 3.6-compatible (AlmaLinux 8 hosts) | running on real hypervisors: ZFS (Debian 13), LVM (AlmaLinux 8); 0.2.0 adds LVM + filesystems, 0.2.2 finds VMs by `/proc` when the libvirt pid files are root-only (0600, seen on a host with Python 3.6) |
 | **Collector** (`pdu-collector`, passive reader of hypervisors) | `server/cmd/pdu-collector`, `server/internal/collector` | Go | tested, not tried on real hosts |
 | Mac app (the first version) | `Sources/`, `Tests/`, `Package.swift` | Swift / SwiftUI | works and was tested by the owner; superseded by the web server, not removed |
 
@@ -61,7 +61,7 @@ Three parts in one repository:
   (sum, readings, lowest) of the idle % it already reads every minute in table `host_idle` (`store/idle.go`, migration 3; `app/idle.go` keeps the
   current hour in memory, flushes every 5 min and on shutdown; 400 days of retention). No extra load on the hosts, about 8,760 rows per host and year.
   It fills from the day this was installed (no backfill). Days/weeks are cut in the time zone of the viewer's browser. API `GET /api/hosts/{id}/idle?range=14d|1y&tz=`.
-* **Updates from the web (Settings → Software)** (the owner's decisions: built locally from a clone, by a button not by a timer, no SSH, a minute or two of delay is fine):
+* **Updates from the web (Settings → Software)** (tried on the real central server: works; the table of the agent versions of all hosts is on the same tab) (the owner's decisions: built locally from a clone, by a button not by a timer, no SSH, a minute or two of delay is fine):
   the version is the git commit (`internal/buildinfo`, from `debug.ReadBuildInfo`; no ldflags). The application never runs anything: it writes
   `update-request` into its data dir (`internal/updater`), and a **root** systemd path unit starts `deploy/update.sh` (installed as
   `/usr/local/sbin/pdu-update server|collector`: git fetch + ff-only, go build to a temp dir, skip if same version, replace binary, restart,
