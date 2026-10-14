@@ -20,7 +20,7 @@ BIN_DIR=${BIN_DIR:-/usr/local/bin}
 SYSTEMCTL=${SYSTEMCTL:-systemctl}
 SETTLE=${SETTLE:-15}                 # seconds the new version has to stay up
 export HOME=${HOME:-/root}
-export PATH="$PATH:/usr/local/go/bin:/usr/lib/go/bin:/usr/local/bin"
+export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/go/bin:/usr/lib/go/bin:/usr/local/bin:/snap/bin"   # systemd services do not have /snap/bin (Go from snap)
 
 status() { printf '%s\t%s\t%s\n' "$1" "$(date +%s)" "$2" > "$STATE/update.status.tmp" && mv -f "$STATE/update.status.tmp" "$STATE/update.status"; chmod 644 "$STATE/update.status"; }
 fail() { echo "FAILED: $1"; status failed "$1"; exit 1; }
@@ -37,7 +37,16 @@ REPO_DIR=""; BRANCH=main
 [ -r "$CONF" ] && . "$CONF"
 [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR/.git" ] || fail "REPO_DIR in $CONF is not a git clone of the repository"
 command -v go >/dev/null || fail "go is not installed on this machine"
-GIT=(git -c safe.directory='*' -C "$REPO_DIR")
+# git runs as the owner of the clone, so that the files it updates stay his (a root-owned update would break his next git pull);
+# the build runs as root, and the git that go starts for the version stamp must accept a clone of another owner
+OWNER=$(stat -c %U "$REPO_DIR" 2>/dev/null || echo root)
+if [ "$OWNER" = root ]; then
+  GIT=(git -C "$REPO_DIR")
+else
+  OWNER_HOME=$(getent passwd "$OWNER" | cut -d: -f6)
+  GIT=(runuser -u "$OWNER" -- env "HOME=${OWNER_HOME:-/}" git -C "$REPO_DIR")
+fi
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
 
 status running "fetching $BRANCH"
 "${GIT[@]}" fetch --quiet origin "$BRANCH" || fail "git fetch of $BRANCH failed (network, or the clone has no origin)"

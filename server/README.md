@@ -204,7 +204,7 @@ The version of the server and of every collector is the commit they were built f
 Once on the server and once on every collector, to put the root side in place (re-running the install script is safe):
 `sudo ./deploy/install.sh --binary ./pdumonitord` and `sudo ./deploy/collector/install.sh --binary ./pdu-collector`, from the git clone.
 They write `REPO_DIR=` (the clone) and `BRANCH=main` into `/etc/pdu-monitor/update.conf` (`/etc/pdu-collector/update.conf`). The machine
-needs `git` and `go` (a clone that can be fast-forwarded: no local commits or changes in it). `journalctl -u pdu-monitor-update` has the details.
+needs `git` and `go` (also Go from snap), and a clone that can be fast-forwarded: no local commits or changes in it. `git` runs as the owner of the clone, so a later `git pull` by that user works. `journalctl -u pdu-monitor-update` has the details.
 
 ## Names of the outlets (servman)
 

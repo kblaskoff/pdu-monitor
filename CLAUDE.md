@@ -22,6 +22,9 @@ Three parts in one repository:
 
 ## Architecture and decisions (do not undo without asking the owner)
 
+* **Words (the owner's, use them in answers):** the **central server** is the machine where `pdumonitord` (the web interface) runs; a **collector** is a machine where
+  `pdu-collector` runs; a **host** is a hypervisor that an agent samples. "Server" alone is ambiguous: do not use it.
+
 * **Central Linux server with a web UI** (Ubuntu 22, Go, one binary `pdumonitord`), 5-15 users, internal network and VPN only.
   Chosen over native apps. The Mac app stays for now; the server can import its settings file (Settings -> Import).
 * **Login to the web UI: LDAP only, and only the group `admins` may enter.** LDAP is used for nothing else: the collector, the agents
@@ -62,7 +65,7 @@ Three parts in one repository:
   roll back when it does not stay up; writes `update.status`/`update.log` that the page shows). Collectors: the server holds a flag per
   collector and returns `"update": id` in the answer to `/api/collector/report`; the collector writes its own request file and acknowledges with
   `update_seen`; the flag is dropped on ack, on a version change or after 15 minutes. `deploy/install.sh` and `deploy/collector/install.sh` install the
-  units and `update.conf` (REPO_DIR, BRANCH) and the `.updater` marker. Needs git + go + a fast-forwardable clone on each machine. The script is
+  units and `update.conf` (REPO_DIR, BRANCH) and the `.updater` marker. Needs git + go (also Go from snap: `/snap/bin` is in the script's PATH) + a fast-forwardable clone on each machine; git runs as the owner of the clone (so his next `git pull` works), the build as root. The script is
   tested here with a fake `systemctl` only; the units are not tried on a real host. The host agents keep the nightly `hostinfo-update`.
 * **No notifications for ZFS DEGRADED** (the owner has Nagios). Over-limit alerts for racks: channel not decided yet.
 * The owner asked that more host statistics will come later; keep the agent format extensible (versioned, strict parsing on the server side).
