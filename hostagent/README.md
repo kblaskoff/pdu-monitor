@@ -5,7 +5,7 @@ the history of 7 days in plain files. The monitoring system reads it over SSH wi
 
 * **No network service.** Nothing listens. A systemd timer starts `hostinfo collect` once a minute; it takes about 40 ms and 10 MB of memory
   (measured: 40 ms of CPU for a sample, 5 MB for 7 days of 20 VMs, 0.16 s to answer a 7 day question).
-* **No root for the sampling.** It runs as the account `hostinfo`, which only reads `/proc`, `/run/libvirt/qemu/*.pid`, asks `zpool`/`zfs`
+* **No root for the sampling.** It runs as the account `hostinfo`, which only reads `/proc`, `/run/libvirt/qemu/*.pid` (on systems where libvirt writes them as mode 0600, root only, the VMs are found by the command lines of the qemu processes in `/proc` instead), asks `zpool`/`zfs`
   and measures the mounted filesystems. The SSH key logs in as a second account, `hostinfo-ro`, which can only read the collected files.
   The one exception is **LVM**: `vgs` and `lvs` need root, so on a host with LVM a second timer (`hostinfo-lvm.timer`, every 5 minutes,
   sandboxed) runs `hostinfo lvm-collect` as root. It runs those two commands with fixed, read-only arguments and writes one file

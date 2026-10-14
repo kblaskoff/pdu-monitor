@@ -82,3 +82,32 @@ func TestHostWithoutHistoryHasEmptyBars(t *testing.T) {
 		t.Errorf("%v", out)
 	}
 }
+
+// An agent samples once a minute: a reading of 100 s ago is current even when this server reads every 15 s.
+func TestAgentReadingIsNotOldJustBecauseTheServerReadsOften(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	st, _ := e.st.Settings(ctx)
+	st.HostPollSeconds = 15
+	if _, err := e.st.SaveSettings(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	vera := e.login("vera")
+	online := func(after time.Duration) bool {
+		e.srv.Now = func() time.Time { return time.Now().Add(after) }
+		_, out := vera.call("GET", "/api/hosts", nil)
+		for _, h := range list(out["hosts"]) {
+			if obj(h)["name"] == "a52sf" {
+				return obj(h)["online"] == true
+			}
+		}
+		t.Fatal("no a52sf")
+		return false
+	}
+	if !online(100 * time.Second) {
+		t.Error("100 s old is current for an agent that samples every 60 s")
+	}
+	if online(400 * time.Second) {
+		t.Error("400 s old is old")
+	}
+}

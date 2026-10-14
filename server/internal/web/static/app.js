@@ -832,7 +832,7 @@ function adminSettings(body, cfg, reload) {
     } catch (e) { saved.className = 'error small'; saved.textContent = e.message; }
   } }, 'Save');
   body.append(h('div', { class: 'card', style: 'max-width:640px' },
-    field('PDU reading (s)', poll, 'How often the PDUs are asked.'), field('Host reading (s)', hostPoll, 'How often the agents of the hosts are read.'),
+    field('PDU reading (s)', poll, 'How often the PDUs are asked.'), field('Host reading (s)', hostPoll, 'How often the agents of the hosts are read. An agent takes a new sample once a minute: reading more often only repeats the same data.'),
     field('Warn at (%)', warn, 'Of the limit; above it a rack or PDU is shown as high.'), field('Restart pause (s)', delay, 'Between switching off and on again (5–10 is usual).'),
     field('Keep history (days)', keep),
     h('h3', { style: 'margin:18px 0 4px' }, 'Names of the outlets (from servman)'),

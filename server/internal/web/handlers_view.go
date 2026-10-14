@@ -251,7 +251,13 @@ func (s *Server) hostBriefs(ctx context.Context, d *pduData, full bool) ([]hostB
 				age = 0
 			}
 			b.AgeSeconds = &age
-			b.Stale = age > int64(3*st.HostPollSeconds)+30
+			// a reading is as old as the agent's last sample, which is up to its own interval (60 s) old whatever this server's
+			// reading interval is: three of the longer of the two, so that reading every 15 s does not make every host "old"
+			every := st.HostPollSeconds
+			if iv := int(stat.Interval); iv > every {
+				every = iv
+			}
+			b.Stale = age > int64(3*every)+30
 			b.Online = hs.Error == "" && !b.Stale
 			b.Cores, b.IdlePct, b.Load = stat.CPU.Cores, stat.CPU.IdlePct, stat.CPU.Load
 			if stat.Mem != nil {

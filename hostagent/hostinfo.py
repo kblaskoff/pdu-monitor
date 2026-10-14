@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 FORMAT = 1
 
 WINDOWS = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
@@ -122,9 +122,46 @@ def clean_name(name):
     return "".join(ch for ch in name if ch >= " " and ch != "\x7f")[:100]
 
 
-def list_vms(cfg):
-    """name -> pid of the running VMs, from the pid files of libvirt."""
+def qemu_name(cmdline):
+    """The name libvirt gave to a VM, from the command line of its qemu process: `-name guest=NAME,debug-threads=on` (newer) or
+    `-name NAME,process=qemu:NAME` (older). Empty when there is none."""
+    args = cmdline.split("\0")
+    for i, arg in enumerate(args[:-1]):
+        if arg == "-name":
+            value = args[i + 1]
+            if value.startswith("guest="):
+                value = value[len("guest="):]
+            return value.split(",")[0]
+    return ""
+
+
+def vms_from_proc(cfg):
+    """name -> pid of the running qemu processes, from /proc alone. On some systems the pid files of libvirt are mode 0600, root only,
+    and the unprivileged account of the agent cannot read them; the command lines of the processes are readable by everybody."""
     result = {}
+    try:
+        entries = os.listdir(cfg.proc)
+    except OSError:
+        return result
+    for entry in sorted(entries):
+        if not entry.isdigit():
+            continue
+        try:
+            comm = read_text(os.path.join(cfg.proc, entry, "comm")).strip().lower()
+            if not (comm.startswith("qemu") or comm.startswith("kvm")):
+                continue
+            name = qemu_name(read_text(os.path.join(cfg.proc, entry, "cmdline")))
+        except OSError:
+            continue
+        if name:
+            result.setdefault(clean_name(name), int(entry))
+    return result
+
+
+def list_vms(cfg):
+    """name -> pid of the running VMs, from the pid files of libvirt; the ones whose pid file cannot be read are found in /proc."""
+    result = {}
+    unreadable = False
     try:
         names = os.listdir(cfg.libvirt)
     except OSError:
@@ -134,10 +171,18 @@ def list_vms(cfg):
             continue
         try:
             pid = int(read_text(os.path.join(cfg.libvirt, entry)).strip())
-        except (OSError, ValueError):
+        except OSError:
+            unreadable = True
+            continue
+        except ValueError:
             continue
         if pid > 0:
             result[clean_name(entry[:-4])] = pid
+    if unreadable:
+        known = set(result.values())
+        for name, pid in vms_from_proc(cfg).items():
+            if name not in result and pid not in known:
+                result[name] = pid
     return result
 
 

@@ -65,6 +65,9 @@ class FakeHost(object):
         self.write("%d/statm" % pid, "1000 250 0 0 0 0 0\n")
         self.write("%d/comm" % pid, comm + "\n")
 
+    def cmdline(self, pid, *args):
+        self.write("%d/cmdline" % pid, "\0".join(args) + "\0")
+
     def remove_vm(self, name, pid):
         os.remove(os.path.join(self.libvirt, name + ".pid"))
         shutil.rmtree(os.path.join(self.proc, str(pid)), ignore_errors=True)
@@ -185,6 +188,31 @@ class CollectTests(unittest.TestCase):
         self.host.vm("monolithic", 51, 100, comm="libvirtd")
         status = hostinfo.collect(self.cfg, now=T0)
         self.assertEqual(sorted(v["name"] for v in status["vms"]["list"]), ["debian", "old", "rhel"])
+
+    def test_vms_whose_pid_file_cannot_be_read_are_found_in_proc(self):
+        # libvirt of some systems writes its pid files with mode 0600, root only: the agent runs as an ordinary account. A directory in the
+        # place of the file gives the same kind of error (OSError) when it is read, and works for a test that may run as root.
+        self.host.vm("readable", 111, 100)
+        for name, pid, args in (("secret1", 211, ("/usr/libexec/qemu-kvm", "-name", "guest=secret1,debug-threads=on", "-S")),
+                                ("secret2", 212, ("/usr/libexec/qemu-kvm", "-name", "secret2,process=qemu:secret2", "-S"))):
+            self.host.vm(name, pid, 100)
+            os.remove(os.path.join(self.host.libvirt, name + ".pid"))
+            os.mkdir(os.path.join(self.host.libvirt, name + ".pid"))
+            self.host.cmdline(pid, *args)
+        self.host.vm("other", 311, 100, comm="bash")                   # not qemu: never taken from /proc
+        self.host.cmdline(311, "bash", "-name", "guest=notavm")
+        status = hostinfo.collect(self.cfg, now=T0)
+        self.assertEqual(sorted(v["name"] for v in status["vms"]["list"]), ["readable", "secret1", "secret2"])
+        self.assertEqual(hostinfo.qemu_name("qemu\0-S\0-name\0guest=a b,debug-threads=on\0-m\01024"), "a b")
+        self.assertEqual(hostinfo.qemu_name("qemu\0-m\01024"), "")
+        self.assertEqual(hostinfo.qemu_name("qemu\0-name"), "")
+
+    def test_proc_is_not_searched_when_every_pid_file_is_readable(self):
+        self.host.vm("one", 111, 100)
+        self.host.vm("two", 112, 100)
+        self.host.cmdline(112, "qemu", "-name", "guest=another-name")  # the pid file wins: no second name for the same process
+        status = hostinfo.collect(self.cfg, now=T0)
+        self.assertEqual(sorted(v["name"] for v in status["vms"]["list"]), ["one", "two"])
 
     def test_vm_names_are_cleaned(self):
         self.host.vm("we\x1bird\nname", 111, 100)
