@@ -176,6 +176,16 @@ class CollectTests(unittest.TestCase):
         self.assertEqual([v["name"] for v in status["vms"]["list"]], ["good"])
         self.assertTrue(any("broken" in e for e in status["errors"]))
 
+    def test_the_pid_file_of_the_libvirt_daemon_is_not_a_vm(self):
+        # the modular libvirt keeps the pid of virtqemud in /run/libvirt/qemu/driver.pid, next to the files of the VMs
+        self.host.vm("rhel", 111, 100, comm="qemu-kvm")
+        self.host.vm("debian", 112, 100, comm="qemu-system-x86")
+        self.host.vm("old", 113, 100, comm="kvm")
+        self.host.vm("driver", 50, 100, comm="virtqemud")
+        self.host.vm("monolithic", 51, 100, comm="libvirtd")
+        status = hostinfo.collect(self.cfg, now=T0)
+        self.assertEqual(sorted(v["name"] for v in status["vms"]["list"]), ["debian", "old", "rhel"])
+
     def test_vm_names_are_cleaned(self):
         self.host.vm("we\x1bird\nname", 111, 100)
         status = hostinfo.collect(self.cfg, now=T0)

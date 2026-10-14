@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 FORMAT = 1
 
 WINDOWS = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
@@ -161,7 +161,8 @@ def is_qemu(cfg, pid):
         comm = read_text(os.path.join(cfg.proc, str(pid), "comm")).strip().lower()
     except OSError:
         return True            # no way to tell: the stat file decides
-    return ("qemu" in comm) or ("kvm" in comm)
+    # qemu-kvm, qemu-system-x86 (the name is cut at 15 characters), kvm; not virtqemud, whose driver.pid sits next to the VMs
+    return comm.startswith("qemu") or comm.startswith("kvm")
 
 
 def parse_zfs(zpool_out, zfs_out):
