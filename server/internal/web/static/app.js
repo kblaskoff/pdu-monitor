@@ -927,6 +927,8 @@ async function adminNames(body) {
 // asks the root side of its own machine (a file), the collectors hear it in the answer to their next report (up to a minute).
 async function adminSoftware(body) {
   let st = await api('GET', '/api/admin/update');
+  let hosts = (await api('GET', '/api/hosts')).hosts || [];
+  let showAllHosts = false, rounds = 0;
   const loadedVersion = (S.session && S.session.version) || st.version;
   let waiting = false, down = false;
   const stateText = (sv) => {
@@ -969,9 +971,9 @@ async function adminSoftware(body) {
       newer ? h('p', { class: 'notice', style: 'margin:10px 0 0' }, 'The server has a new version. ', h('button', { class: 'link', onclick: () => location.reload() }, 'Reload this page'), ' (or Ctrl+F5) to get the new screens.') : null,
       sv.log && sv.log.length ? h('details', { style: 'margin-top:10px' }, h('summary', {}, 'Output of the last update'), h('pre', { class: 'key' }, sv.log.join('\n'))) : null);
     const cols = st.collectors || [];
-    const colCard = cols.length ? h('div', { class: 'card' }, h('div', { style: 'display:flex;gap:14px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Collectors'), h('div', { class: 'spacer' }),
-        h('button', { class: 'primary', disabled: cols.some((c) => c.requested), onclick: () => updateCollectors('') }, 'Update all collectors')),
-      h('div', { class: 'tablewrap', style: 'box-shadow:none;margin-top:8px' }, h('table', {}, h('thead', {}, h('tr', {}, ['Collector', 'Version', 'Last report', ''].map((t) => h('th', {}, t)))),
+    const colCard = cols.length ? h('div', { class: 'card' }, h('div', { style: 'display:flex;gap:14px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Relays (pdu-collector)'), h('div', { class: 'spacer' }),
+        h('button', { class: 'primary', disabled: cols.some((c) => c.requested), onclick: () => updateCollectors('') }, 'Update all relays')),
+      h('div', { class: 'tablewrap', style: 'box-shadow:none;margin-top:8px' }, h('table', {}, h('thead', {}, h('tr', {}, ['Relay', 'Version', 'Last report', ''].map((t) => h('th', {}, t)))),
         h('tbody', {}, cols.map((c) => {
           const age = c.lastSeen ? Math.round((Date.now() - new Date(c.lastSeen).getTime()) / 1000) : null;
           const same = c.version && c.version === st.version;
@@ -979,10 +981,29 @@ async function adminSoftware(body) {
             h('td', {}, age == null ? h('span', { class: 'c-over' }, 'never') : h('span', { class: age > 180 ? 'c-over' : 'c-ok' }, ago(Math.max(age, 0)) + ' ago')),
             h('td', { class: 'num' }, c.requested ? h('span', { class: 'muted small' }, 'asked, waiting for its next report…') : h('button', { class: 'small', onclick: () => updateCollectors(c.name) }, 'Update')));
         })))),
-      h('p', { class: 'note' }, 'A collector tells its version with every report. A different version after the update means it worked; the same one means it was already the newest (or the updater is not installed there: see its log with journalctl -u pdu-collector-update).')) : h('div', { class: 'card' }, h('h2', {}, 'Collectors'), h('p', { class: 'muted' }, 'No collector is configured on this server.'));
-    body.replaceChildren(serverCard, colCard);
+      h('p', { class: 'note' }, 'A collector tells its version with every report. A different version after the update means it worked; the same one means it was already the newest (or the updater is not installed there: see its log with journalctl -u pdu-collector-update).')) : h('div', { class: 'card' }, h('h2', {}, 'Relays (pdu-collector)'), h('p', { class: 'muted' }, 'No pdu-collector relay is configured on this server.'));
+    // the agents on the hypervisors: they update themselves every night (hostinfo-update); the newest version that any host reports is "current"
+    const vkey = (v) => (v || '').split('.').map((n) => parseInt(n, 10) || 0);
+    const vcmp = (a, b) => { const x = vkey(a), y = vkey(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d; } return 0; };
+    const withVersion = hosts.filter((x) => x.agent);
+    const newest = withVersion.reduce((m, x) => (m === '' || vcmp(x.agent, m) > 0 ? x.agent : m), '');
+    const behind = (x) => !x.agent || vcmp(x.agent, newest) < 0;
+    const sorted = hosts.slice().sort((a, b) => (behind(b) - behind(a)) || (vcmp(a.agent, b.agent)) || a.name.localeCompare(b.name));
+    const shown = showAllHosts || sorted.length <= 15 ? sorted : sorted.filter(behind);
+    const hostCard = h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', {}, 'Agents on the hosts'),
+      !hosts.length ? h('p', { class: 'muted' }, 'No host yet.') : [
+        h('p', { class: 'small', style: 'margin:0 0 8px' }, newest ? [`${hosts.length - hosts.filter(behind).length} of ${hosts.length} hosts run the newest version seen, `, h('strong', { class: 'mono' }, newest), '.'] : 'No host has told its version yet.'),
+        shown.length ? h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, ['Host', 'Agent', 'Data', 'Read by'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, shown.map((x) => h('tr', {}, h('td', { class: 'name' }, h('a', { href: '#/host/' + x.id }, x.name)),
+            h('td', { class: 'mono' }, x.agent || '—', x.agent && behind(x) ? h('span', { class: 'small c-warning', style: 'margin-left:8px' }, 'older') : null),
+            h('td', {}, x.ageSeconds == null ? h('span', { class: 'muted' }, 'none') : h('span', { class: x.online ? 'c-ok' : 'c-over' }, ago(x.ageSeconds) + ' old')),
+            h('td', { class: 'muted' }, x.collector ? 'via ' + x.collector : 'this server')))))) : h('p', { class: 'c-ok' }, 'Every host runs the newest version seen.'),
+        sorted.length > 15 ? h('button', { class: 'link', style: 'margin-top:8px', onclick: () => { showAllHosts = !showAllHosts; draw(); } }, showAllHosts ? 'Show only the ones that are behind' : `Show all ${sorted.length}`) : null,
+        h('p', { class: 'note' }, 'The agents update themselves every night from the main branch (hostinfo-update). At once, on one host: hostinfo-update (as root). The server cannot know the newest version of GitHub: "older" means older than the newest one that a host reports.')]);
+    body.replaceChildren(serverCard, colCard, hostCard);
   }
   async function refresh() {
+    if (++rounds % 10 === 0) { try { hosts = (await api('GET', '/api/hosts')).hosts || hosts; } catch (e) { /* the next round */ } }
     try { st = await api('GET', '/api/admin/update'); down = false; if (st.server.state && st.server.state !== 'running' && !st.server.pending) waiting = false; } catch (e) { if (e instanceof ApiError && e.status === 401) return; down = waiting; }
     draw();
   }

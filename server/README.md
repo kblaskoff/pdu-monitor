@@ -190,13 +190,15 @@ and its power outlet name with **Edit** to join it with its power. The server ne
 ## Updating from the web interface (Settings → Software)
 
 The version of the server and of every collector is the commit they were built from. **Update the server** and **Update all collectors**
-(or one) build the newest `main` of the git clone that is on the machine and restart the program. Nothing connects anywhere with SSH:
+(or one; the buttons for the `pdu-collector` relays) build the newest `main` of the git clone that is on the machine and restart the program. Nothing connects anywhere with SSH:
 
 * **The server:** the web process writes one file (`/var/lib/pdu-monitor/update-request`). A root systemd path unit
   (`pdu-monitor-update.path`) sees it and runs `/usr/local/sbin/pdu-update server` (`deploy/update.sh`): `git fetch` and fast-forward of the
   clone, `go build` into a temporary directory, nothing to do when the commit is the one that runs, otherwise it replaces
   `/usr/local/bin/pdumonitord`, restarts the service and **puts the old binary back** if the new one has not stayed up for 15 seconds.
   The state and the output are shown on the page; the web interface is away for about half a minute.
+* **The hosts** are not updated from here: their agents update themselves every night (`hostinfo-update`). The page lists the agent version of every host and marks
+  the ones that are older than the newest one reported.
 * **The collectors:** the button only sets a flag on the server. Every collector hears it in the answer to its next report (within a minute),
   leaves its own request file, and its own root path unit does the same as above. After the restart it reports its new version; a
   request that nobody takes is dropped after 15 minutes.
