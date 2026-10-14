@@ -1,0 +1,13 @@
+[Unit]
+Description=Install a new version of hostinfo from GitHub, if hostagent/ has changed
+Documentation=https://github.com/kblaskoff/pdu-monitor/blob/main/hostagent/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# no sandbox: it runs install.sh, which manages accounts, files in /usr/local/sbin and systemd units
+ExecStart=/usr/local/sbin/hostinfo-update --quiet
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=idle

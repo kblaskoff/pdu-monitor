@@ -48,7 +48,7 @@ cd /opt/pdu-monitor/hostagent
 ```
 
 The script creates the accounts `hostinfo` (collects) and `hostinfo-ro` (what the key logs in as), installs `/usr/local/sbin/hostinfo`,
-`/var/lib/hostinfo` and the timer (and, if `vgs` exists, the LVM timer), writes the key line and ends with a dry run: the number of
+`/var/lib/hostinfo` the timer (and, if `vgs` exists, the LVM timer) and the nightly updater `hostinfo-update` (see [Update](#update)), writes the key line and ends with a dry run: the number of
 running VMs, the ZFS pools, the LVM volume groups, the filesystems and any problem.
 `--from` limits where the key may be used from (several addresses: `--from 10.0.0.5,10.0.0.6`). The key line is
 
@@ -96,24 +96,44 @@ done
 
 ## Update
 
-Take the files again (the same line as in step 2; it replaces them in place) and run the script **without** `--key`:
+**By itself, every night.** `install.sh` installs `/usr/local/sbin/hostinfo-update` and the timer `hostinfo-update.timer`
+(at 03:00 plus a random wait of up to an hour; a host that was off at night looks when it starts). It asks GitHub which commit
+last changed `hostagent/` on `main`, a small answer of about 4 KB, and compares it with the one in `/var/lib/hostinfo/installed-commit`.
+If they are the same, nothing is downloaded and nothing is changed. If there is a new one, it downloads the archive of exactly that
+commit, checks it and runs its `install.sh --update`. If any step fails (no answer, a broken download, an install error), the
+installed version stays and the next night tries again.
+
+`--update` never touches the key line; the collected history in `/var/lib/hostinfo` and changes made with `systemctl edit`
+(for example `User=root`) stay too. Nothing has to be done on the server: it reads the new version at its next poll.
+
+**By hand**, as root, any time (a run of the timer and a run by hand never overlap):
+
+```
+hostinfo-update --check      # only says whether there is a new version (exit 0: up to date, 10: a new one is there)
+hostinfo-update              # installs it, if there is one
+hostinfo-update --force      # installs the newest version even if it is the one installed
+journalctl -u hostinfo-update.service           # what the nightly runs did
+systemctl list-timers hostinfo-update.timer     # when the next one is
+```
+
+The first run after the install downloads once, because it does not know yet which commit is installed.
+Not wanted on a host: `systemctl disable --now hostinfo-update.timer`. Cron instead of the timer:
+`17 3 * * * root /usr/local/sbin/hostinfo-update --quiet` in `/etc/cron.d/hostinfo-update` (cron mails what it prints).
+
+**A host installed before the updater existed** gets it with one manual update (the key line is kept):
 
 ```
 curl -fsSL https://github.com/kblaskoff/pdu-monitor/archive/refs/heads/main.tar.gz | tar xz -C /opt/pdu-monitor --strip-components=1 pdu-monitor-main/hostagent
-cd /opt/pdu-monitor/hostagent && ./install.sh
-/usr/local/sbin/hostinfo version
+cd /opt/pdu-monitor/hostagent && ./install.sh --update
 ```
 
-`/opt/pdu-monitor` is only where the files are installed from: the timer runs `/usr/local/sbin/hostinfo` and the data is in
-`/var/lib/hostinfo`, so nothing that is running reads the folder while it is replaced.
-
-Without `--key` the key line stays as it is. The collected history in `/var/lib/hostinfo` and changes made with `systemctl edit`
-(for example `User=root`) stay too. Nothing has to be done on the server: it reads the new version at its next poll.
-For all hypervisors from the server: the loop above with `./install.sh` instead of `./install.sh --key …`.
+`/opt/pdu-monitor` is only where the files are installed from: the timers run the programs in `/usr/local/sbin` and the data is in
+`/var/lib/hostinfo`, so nothing that is running reads the folder while it is replaced. For all such hypervisors from the server:
+the loop above with `./install.sh --update` instead of `./install.sh --key …`.
 
 ## Remove
 
-`./install.sh --uninstall` removes the program, the timer and both accounts; the collected data is left in `/var/lib/hostinfo`.
+`./install.sh --uninstall` removes the programs, the timers (also the updater) and both accounts; the collected data is left in `/var/lib/hostinfo`.
 Delete the host in Settings → Hosts as well.
 
 ## If something does not work

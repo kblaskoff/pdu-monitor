@@ -2,6 +2,7 @@
 # Installs hostinfo on a KVM/libvirt hypervisor (AlmaLinux / RHEL 9 and similar). Run as root from this folder:
 #
 #   ./install.sh --key "ssh-ed25519 AAAA... pdu-monitor" [--from 10.0.0.5]
+#   ./install.sh --update        (what hostinfo-update runs: the key line is never touched)
 #   ./install.sh --uninstall
 #
 # --key   the PUBLIC key of the monitoring system. It can do exactly one thing: run `hostinfo serve` (status / top 1h|6h|24h|7d).
@@ -10,15 +11,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PROGRAM=/usr/local/sbin/hostinfo
+UPDATER=/usr/local/sbin/hostinfo-update
 DATA=/var/lib/hostinfo
 READER=hostinfo-ro
 
 [[ $EUID -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-  systemctl disable --now hostinfo-collect.timer hostinfo-lvm.timer 2>/dev/null || true
+  systemctl disable --now hostinfo-collect.timer hostinfo-lvm.timer hostinfo-update.timer 2>/dev/null || true
   rm -f /etc/systemd/system/hostinfo-collect.service /etc/systemd/system/hostinfo-collect.timer \
-        /etc/systemd/system/hostinfo-lvm.service /etc/systemd/system/hostinfo-lvm.timer "$PROGRAM"
+        /etc/systemd/system/hostinfo-lvm.service /etc/systemd/system/hostinfo-lvm.timer \
+        /etc/systemd/system/hostinfo-update.service /etc/systemd/system/hostinfo-update.timer \
+        "$PROGRAM" "$UPDATER" "$DATA/installed-commit"
   systemctl daemon-reload
   userdel -r "$READER" 2>/dev/null || true
   userdel hostinfo 2>/dev/null || true
@@ -27,14 +31,17 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   exit 0
 fi
 
-KEY=""; FROM=""
+KEY=""; FROM=""; UPDATE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --key) KEY="$2"; shift 2 ;;
     --from) FROM="$2"; shift 2 ;;
+    --update) UPDATE=1; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
+
+[[ $UPDATE -eq 0 || ( -z "$KEY" && -z "$FROM" ) ]] || { echo "--update keeps the key: it cannot be given with --key or --from." >&2; exit 1; }
 
 command -v python3 >/dev/null || { echo "python3 is needed." >&2; exit 1; }
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)' || { echo "Python 3.6 or newer is needed." >&2; exit 1; }
@@ -47,9 +54,11 @@ id "$READER" >/dev/null 2>&1 || useradd -m -s /bin/sh -G hostinfo "$READER"
 id -nG "$READER" | tr ' ' '\n' | grep -qx hostinfo || usermod -aG hostinfo "$READER"
 
 install -o root -g root -m 0755 hostinfo.py "$PROGRAM"
+install -o root -g root -m 0755 update.sh "$UPDATER"
 install -d -o hostinfo -g hostinfo -m 0750 "$DATA"
 install -o root -g root -m 0644 systemd/hostinfo-collect.service systemd/hostinfo-collect.timer \
-        systemd/hostinfo-lvm.service systemd/hostinfo-lvm.timer /etc/systemd/system/
+        systemd/hostinfo-lvm.service systemd/hostinfo-lvm.timer \
+        systemd/hostinfo-update.service systemd/hostinfo-update.timer /etc/systemd/system/
 
 if [[ -n "$KEY" ]]; then
   [[ "$KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+|sk-ssh-ed25519@openssh.com)\  ]] || { echo "--key must be a public key line." >&2; exit 1; }
@@ -64,11 +73,13 @@ if [[ -n "$KEY" ]]; then
 fi
 
 if command -v restorecon >/dev/null; then
-  restorecon -R "$PROGRAM" "$DATA" "$(getent passwd "$READER" | cut -d: -f6)/.ssh" 2>/dev/null || true
+  restorecon -R "$PROGRAM" "$UPDATER" "$DATA" "$(getent passwd "$READER" | cut -d: -f6)/.ssh" 2>/dev/null || true
 fi
 
 systemctl daemon-reload
 systemctl enable --now hostinfo-collect.timer
+# every night: a new version from GitHub, only if hostagent/ has changed (hostinfo-update --check to look by hand)
+systemctl enable --now hostinfo-update.timer
 # LVM needs root to be asked: a second, separate timer does only that (every 5 minutes) and leaves one file for the collector
 if command -v vgs >/dev/null; then
   systemctl enable --now hostinfo-lvm.timer
@@ -101,6 +112,16 @@ if ! runuser -u hostinfo -- zpool list >/dev/null 2>&1 && command -v zpool >/dev
   echo "        systemctl edit hostinfo-collect.service   ->   [Service]  User=root  Group=root"
 fi
 echo
-echo "Installed. The first sample is written within a minute: $DATA/status.json"
-[[ -n "$KEY" ]] || echo "No key given: add one later with: ./install.sh --key \"ssh-ed25519 AAAA...\""
-echo "Test from the monitoring system:  ssh -i <private key> $READER@<this host> status"
+AUTHORIZED="$(getent passwd "$READER" | cut -d: -f6)/.ssh/authorized_keys"
+if [[ $UPDATE -eq 1 ]]; then
+  echo "Updated to $("$PROGRAM" version). The key line was not touched."
+else
+  echo "Installed. The first sample is written within a minute: $DATA/status.json"
+  if [[ -n "$KEY" ]]; then
+    echo "Test from the monitoring system:  ssh -i <private key> $READER@<this host> status"
+  elif [[ -s "$AUTHORIZED" ]]; then
+    echo "The key line was kept."
+  else
+    echo "No key given: add one later with: ./install.sh --key \"ssh-ed25519 AAAA...\""
+  fi
+fi

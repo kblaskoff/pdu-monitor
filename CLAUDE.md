@@ -33,6 +33,9 @@ Three parts in one repository:
   user (`hostinfo-ro`) with a forced-command SSH key can only run `status` and `top 1h|6h|24h|7d`. Format: `hostagent/FORMAT.md` (format 1).
   Storage: ZFS pools (`zpool`/`zfs`), LVM volume groups (`vgs`/`lvs` need root: a separate root timer `hostinfo-lvm` writes `lvm.json`), mounted filesystems (statvfs).
   The key line has `from="ADDRESS"`: it must be the address the host *sees* (NAT!); sshd logs "correct key but not from a permitted host" otherwise.
+  Updates: `hostinfo-update` (`hostagent/update.sh`, a root timer every night) asks GitHub for the last commit of `hostagent/` on
+  `main` and installs the archive of that commit with `install.sh --update` only when it differs from `/var/lib/hostinfo/installed-commit`.
+  The owner decided against a release branch: every agent change is tried by hand first, so what reaches `main` in `hostagent/` goes to every host the next night.
   Reading is done either by the server itself over SSH, or by a **collector**.
 * **Host keys are pinned.** A person compares the fingerprint with the one on the host and types it (web UI for the server, `pdu-collector trust`
   for the collector). There is no silent trust-on-first-use.

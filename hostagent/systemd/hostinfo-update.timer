@@ -1,0 +1,12 @@
+[Unit]
+Description=Look for a new version of hostinfo every night
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+# hosts behind one address must not all ask GitHub at the same minute (60 questions per hour and address without a login)
+RandomizedDelaySec=1h
+# a host that was off at night looks when it starts
+Persistent=true
+
+[Install]
+WantedBy=timers.target
