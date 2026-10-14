@@ -6,3 +6,7 @@ build/
 xcuserdata/
 __pycache__/
 *.pyc
+
+# built in place (a stray binary would make the version look modified: Go counts untracked files)
+/server/pdumonitord
+/server/pdu-collector

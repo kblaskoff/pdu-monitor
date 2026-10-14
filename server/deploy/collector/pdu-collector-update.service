@@ -9,11 +9,5 @@ Type=oneshot
 # file is read as a command. Not part of pdu-collector.service, so restarting that does not stop the update.
 ExecStart=/usr/local/sbin/pdu-update collector
 TimeoutStartSec=900
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=full
-ReadWritePaths=/usr/local/bin /var/lib/pdu-collector
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-RestrictNamespaces=yes
-LockPersonality=yes
+# No sandboxing here, on purpose: this job is root anyway, and Go installed with snap does not run under NoNewPrivileges, RestrictNamespaces or
+# a read-only /sys ("cannot change profile for the next exec call: Operation not permitted").
