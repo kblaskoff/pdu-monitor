@@ -33,7 +33,14 @@ Three parts in one repository:
 * **Login to the web UI: LDAP only, and only the group `admins` may enter.** LDAP is used for nothing else: the collector, the agents
   and the PDUs never touch it. The roles admin / operator / viewer exist
   in the code; today only `admin: [admins]` is configured. The directory is an old version: filters, group lookup, StartTLS/LDAPS and `legacy_tls` are
-  configurable, and `pdumonitord ldap-test` shows every step. No TOTP (VPN + LDAP is enough). An emergency local admin (bcrypt) is optional.
+  configurable, and `pdumonitord ldap-test` shows every step. An emergency local admin (bcrypt) is optional.
+  **Second step (the owner asked for it later, replacing "no TOTP"):** per person, after the LDAP password: up to 3 authenticator apps (TOTP, RFC 6238, own key per device),
+  up to 3 passkeys (WebAuthn, own small implementation in `internal/webauthn`: ES256/RS256/EdDSA, attestation not checked, user verification required, needs `public_url` in
+  config.yaml = https + host name), 10 recovery codes. Passkeys are a *second* step, not a replacement of the LDAP password (that would skip the group check).
+  Tables `auth_factors`, `recovery_codes`, `sessions` (migration 4); TOTP secrets are encrypted with `secret.key`; the setting `requireMfa` (web UI) limits a session to the set-up
+  page until a device exists (the local emergency account is exempt); wrong codes are rate limited; `pdumonitord mfa-list|mfa-reset` for lockouts.
+  **Sessions live in the database** (hash of the token only) so that an update does not log everybody out, and the length of a login is the setting `sessionHours`
+  (default 72), not config.yaml (`session:` there is ignored).
 * **PDUs are always read by the server** (SNMP v1; communities are encrypted in the database with `secret.key`).
 * **Hypervisors: no SNMP.** The agent (`hostagent/hostinfo.py`) runs from a systemd timer as the account `hostinfo` (root only where `/proc` has `hidepid` or `zpool` needs it), writes plain files; a read-only
   user (`hostinfo-ro`) with a forced-command SSH key can only run `status` and `top 1h|6h|24h|7d`. Format: `hostagent/FORMAT.md` (format 1).

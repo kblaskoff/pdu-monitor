@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,9 @@ type Config struct {
 	TLSCert        string `yaml:"tls_cert"`
 	TLSKey         string `yaml:"tls_key"`
 	AllowPlainHTTP bool   `yaml:"allow_plain_http"`
+	// PublicURL is the address people type in the browser (https://pdu.example.com or https://pdu.example.com:8443). Passkeys need it: they
+	// are tied to the name of the site, which must be a host name (not an IP address). Without it only authenticator apps are offered.
+	PublicURL string `yaml:"public_url"`
 	// DataDir holds the database, the key that protects the communities and the SSH key of this server.
 	DataDir string `yaml:"data_dir"`
 
@@ -55,6 +60,8 @@ type Config struct {
 		PasswordHash string `yaml:"password_hash"`
 	} `yaml:"local_admin"`
 
+	// Session is not used any more: how long people stay logged in is a setting of the web interface (Settings). The keys are still read so
+	// that an old config.yaml loads.
 	Session struct {
 		IdleMinutes int `yaml:"idle_minutes"`
 		MaxHours    int `yaml:"max_hours"`
@@ -122,6 +129,11 @@ func (c *Config) finish(dir string) error {
 	}
 	if c.Session.MaxHours <= 0 {
 		c.Session.MaxHours = 24
+	}
+	if c.PublicURL != "" {
+		if _, _, err := c.RelyingParty(); err != nil {
+			return err
+		}
 	}
 	if c.Servman.URL != "" {
 		if c.Servman.TokenFile == "" {
@@ -237,9 +249,24 @@ ldap:
 #   - name: collector-a
 #     token_sha256: "..."
 
-session:
-  idle_minutes: 480
-  max_hours: 24
+# The address people type in the browser. It makes passkeys (a fingerprint on a laptop) possible; it must be a host name, not an IP address.
+# public_url: https://pdu.example.com:8443
 
 debug: false
 `
+
+// RelyingParty gives the host name and the origin that passkeys are tied to, from public_url.
+func (c *Config) RelyingParty() (id, origin string, err error) {
+	u, err := url.Parse(c.PublicURL)
+	if err != nil || u.Host == "" || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.User != nil {
+		return "", "", errors.New("public_url: write the address as https://name or https://name:port, nothing after it")
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) != nil {
+		return "", "", errors.New("public_url: passkeys need a host name, not an IP address")
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && host == "localhost") {
+		return "", "", errors.New("public_url: passkeys need https (http works only for localhost)")
+	}
+	return host, u.Scheme + "://" + u.Host, nil
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/kblaskoff/pdu-monitor/server/internal/app"
 	"github.com/kblaskoff/pdu-monitor/server/internal/auth"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
+	"github.com/kblaskoff/pdu-monitor/server/internal/webauthn"
 )
 
 //go:embed static
@@ -84,6 +85,8 @@ type Server struct {
 	Secure  bool
 	Demo    bool
 	Version string
+	// RP is this site for passkeys (public_url in config.yaml); nil: passkeys are off (authenticator apps still work).
+	RP *webauthn.RP
 	// UpdateDir is where the update request, status and log of this server live (its data directory); empty: no update button.
 	UpdateDir string
 	// Collectors may push the readings of hypervisors (POST /api/collector/report) with their token.
@@ -93,6 +96,8 @@ type Server struct {
 
 	byIP   *auth.Limiter
 	byUser *auth.Limiter
+	byMFA  *auth.Limiter // wrong second-step codes, per person
+	mfa    *mfaState
 	// FailureDelay slows down every failed login a little (tests set it to 0).
 	FailureDelay time.Duration
 
@@ -102,7 +107,7 @@ type Server struct {
 
 func New(a *app.App, st *store.Store, authn auth.Authenticator, sessions *auth.Sessions) *Server {
 	return &Server{App: a, Store: st, Auth: authn, Sessions: sessions, Now: time.Now, Version: "dev",
-		byIP: auth.NewLimiter(20, 10*time.Minute), byUser: auth.NewLimiter(6, 15*time.Minute), FailureDelay: 400 * time.Millisecond,
+		byIP: auth.NewLimiter(20, 10*time.Minute), byUser: auth.NewLimiter(6, 15*time.Minute), byMFA: auth.NewLimiter(8, 15*time.Minute), mfa: newMFAState(), FailureDelay: 400 * time.Millisecond,
 		pendingKeys: newPendingKeys(), collected: &collectors{seen: map[string]collectorSeen{}, wanted: map[string]updateWish{}}}
 }
 
@@ -153,6 +158,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsGet))
 	mux.HandleFunc("PUT /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsPut))
 	mux.HandleFunc("POST /api/admin/import", s.api(auth.RoleAdmin, s.handleImport))
+	mux.HandleFunc("POST /api/login/mfa", s.handleLoginMFA)
+	mux.HandleFunc("POST /api/login/passkey/begin", s.handleLoginPasskeyBegin)
+	mux.HandleFunc("POST /api/login/passkey/finish", s.handleLoginPasskeyFinish)
+	mux.HandleFunc("GET /api/me/mfa", s.api(auth.RoleViewer, s.handleMFAGet))
+	mux.HandleFunc("POST /api/me/mfa/totp/begin", s.api(auth.RoleViewer, s.handleTOTPBegin))
+	mux.HandleFunc("POST /api/me/mfa/totp/confirm", s.api(auth.RoleViewer, s.handleTOTPConfirm))
+	mux.HandleFunc("POST /api/me/mfa/passkey/begin", s.api(auth.RoleViewer, s.handlePasskeyBegin))
+	mux.HandleFunc("POST /api/me/mfa/passkey/finish", s.api(auth.RoleViewer, s.handlePasskeyFinish))
+	mux.HandleFunc("POST /api/me/mfa/recovery", s.api(auth.RoleViewer, s.handleRecoveryNew))
+	mux.HandleFunc("DELETE /api/me/mfa/{id}", s.api(auth.RoleViewer, s.handleMFARemove))
+	mux.HandleFunc("GET /api/admin/mfa", s.api(auth.RoleAdmin, s.handleAdminMFA))
+	mux.HandleFunc("DELETE /api/admin/mfa", s.api(auth.RoleAdmin, s.handleAdminMFAReset))
 	mux.HandleFunc("GET /api/admin/update", s.api(auth.RoleAdmin, s.handleUpdate))
 	mux.HandleFunc("POST /api/admin/update/server", s.api(auth.RoleAdmin, s.handleUpdateServer))
 	mux.HandleFunc("POST /api/admin/update/collectors", s.api(auth.RoleAdmin, s.handleUpdateCollectors))
@@ -295,6 +312,10 @@ func (s *Server) api(min auth.Role, h handlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "your account may not do this")
 			return
 		}
+		if sess.IsLimited() && !strings.HasPrefix(r.URL.Path, "/api/me/mfa") && r.URL.Path != "/api/logout" {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "set up the second step of the login first (Security)", "mfaSetup": true})
+			return
+		}
 		h(w, r, sess)
 	}
 }
@@ -308,7 +329,7 @@ type loginRequest struct {
 
 func (s *Server) sessionInfo(sess *auth.Session) map[string]any {
 	st, _ := s.Store.Settings(context.Background())
-	return map[string]any{"user": sess.User, "csrf": sess.CSRF, "demo": s.Demo, "version": s.Version,
+	return map[string]any{"user": sess.User, "csrf": sess.CSRF, "demo": s.Demo, "version": s.Version, "mfa": sess.MFA, "limited": sess.IsLimited(),
 		"settings": map[string]any{"warnPercent": st.WarnPercent, "restartDelaySeconds": st.RestartDelaySecond, "pollSeconds": st.PollSeconds}}
 }
 
@@ -371,10 +392,37 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.byUser.Reset(userKey)
-	token, sess := s.Sessions.Create(user, ip)
-	_ = s.Store.Audit(ctx, user.Name, "login", user.Source+", role "+string(user.Role), true)
+	ukey := auth.UserKey(user)
+	factors, err := s.Store.Factors(ctx, ukey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "the login could not be completed: "+err.Error())
+		return
+	}
+	if len(factors) > 0 { // the password was right: now the second step; no session yet
+		pending := s.mfa.newLogin(user, ip, s.Now())
+		if pending == "" {
+			writeError(w, http.StatusServiceUnavailable, "too many logins are waiting for their second step: try again in a few minutes")
+			return
+		}
+		_ = s.Store.Audit(ctx, user.Name, "login.password", "the password is right, the second step is next", true)
+		writeJSON(w, 200, map[string]any{"mfa": true, "token": pending, "methods": s.methodsOf(ctx, ukey, factors), "user": user.Name})
+		return
+	}
+	st, _ := s.Store.Settings(ctx)
+	s.startSession(w, ctx, user, ip, false, st.RequireMFA && user.Source != "local", "")
+}
+
+// startSession makes the session and the cookie. limited: the person has no second step yet and the administrator requires one, so the
+// session may do nothing but set it up.
+func (s *Server) startSession(w http.ResponseWriter, ctx context.Context, user *auth.User, ip string, mfa, limited bool, how string) {
+	token, sess := s.Sessions.CreateWith(user, ip, mfa, limited)
+	detail := user.Source + ", role " + string(user.Role) + how
+	if limited {
+		detail += ", must set up the second step"
+	}
+	_ = s.Store.Audit(ctx, user.Name, "login", detail, true)
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteStrictMode,
-		MaxAge: int(s.Sessions.Max.Seconds())})
+		MaxAge: int(s.Sessions.MaxAge().Seconds())})
 	writeJSON(w, 200, s.sessionInfo(sess))
 }
 

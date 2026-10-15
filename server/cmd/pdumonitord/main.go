@@ -41,6 +41,7 @@ import (
 	"github.com/kblaskoff/pdu-monitor/server/internal/servman"
 	"github.com/kblaskoff/pdu-monitor/server/internal/store"
 	"github.com/kblaskoff/pdu-monitor/server/internal/web"
+	"github.com/kblaskoff/pdu-monitor/server/internal/webauthn"
 )
 
 // version is the commit the binary was built from (the updater builds in a clone); -ldflags "-X main.version=1.0.0" overrides it
@@ -60,6 +61,8 @@ const usage = `pdumonitord - PDU Monitor server
   pdumonitord ldap-test -config FILE -user NAME              try a login against the directory and show every step
   pdumonitord pubkey -config FILE                            the public key of this server (for install.sh --key of the host agent)
   pdumonitord collector-token -name NAME                     make the token of a collector (for pdu-collector) and the lines for this configuration
+  pdumonitord mfa-list -config FILE                          who has a second step for the login (authenticator apps, passkeys)
+  pdumonitord mfa-reset -config FILE -user ldap:NAME         remove the second step of somebody who lost every device (restart the server to log them out)
   pdumonitord hash-password                                  make the hash for local_admin.password_hash
   pdumonitord selfsigned -host NAME -out DIR                 make a self-signed certificate (for a first start or a lab)
   pdumonitord version
@@ -82,6 +85,8 @@ func main() {
 		err = pubkey(os.Args[2:])
 	case "collector-token":
 		err = collectorToken(os.Args[2:])
+	case "mfa-list", "mfa-reset":
+		err = mfaAdmin(os.Args[1], os.Args[2:])
 	case "hash-password":
 		err = hashPassword()
 	case "selfsigned":
@@ -223,8 +228,23 @@ func serve(args []string) error {
 		application.Servman = client
 		logger.Print("servman: the outlets of the PDUs are named after " + scfg.URL + " (intervals: Settings)")
 	}
-	sessions := auth.NewSessions(time.Duration(cfg.Session.IdleMinutes)*time.Minute, time.Duration(cfg.Session.MaxHours)*time.Hour)
+	settings, _ := st.Settings(ctx)
+	stay := time.Duration(settings.SessionHours) * time.Hour // how long people stay logged in: a setting of the web interface
+	sessions := auth.NewSessions(stay, stay)
+	sessions.Store = st // sessions survive a restart (an update makes one)
+	if err := sessions.Load(ctx); err != nil {
+		logger.Printf("sessions: %v", err)
+	}
 	srv := web.New(application, st, authn, sessions)
+	switch {
+	case cfg.PublicURL != "":
+		id, origin, _ := cfg.RelyingParty() // checked when the file was read
+		srv.RP = &webauthn.RP{ID: id, Origins: []string{origin}}
+	case *demoMode:
+		if _, port, err := net.SplitHostPort(cfg.Listen); err == nil { // so that passkeys can be tried: open http://localhost:PORT
+			srv.RP = &webauthn.RP{ID: "localhost", Origins: []string{"http://localhost:" + port}}
+		}
+	}
 	srv.Keys = keys
 	srv.ServerKey = hostinfo.PublicKeyLine(signer)
 	srv.Secure = cfg.TLSCert != ""
@@ -473,5 +493,54 @@ func selfSigned(args []string) error {
 		return err
 	}
 	fmt.Println("written", filepath.Join(*out, "tls.crt"), "and tls.key (valid 2 years). Browsers will warn about it: for real use take a certificate of your internal CA.")
+	return nil
+}
+
+// mfaAdmin lists and resets the second step of the login without the web interface (for the day when nobody can log in).
+func mfaAdmin(command string, args []string) error {
+	fs := flag.NewFlagSet(command, flag.ExitOnError)
+	path := fs.String("config", "/etc/pdu-monitor/config.yaml", "configuration file")
+	user := fs.String("user", "", "who, as it is shown by mfa-list (ldap:anna)")
+	_ = fs.Parse(args)
+	cfg, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	key, err := store.LoadOrCreateKey(filepath.Join(cfg.DataDir, "secret.key"))
+	if err != nil {
+		return err
+	}
+	secrets, err := store.NewSecrets(key)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(cfg.DataDir, "pdu-monitor.db"), secrets)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if command == "mfa-list" {
+		users, err := st.UsersWithFactors(ctx)
+		if err != nil {
+			return err
+		}
+		for _, u := range users {
+			fmt.Printf("%-30s authenticator apps: %d   passkeys: %d   recovery codes left: %d\n", u.User, u.TOTP, u.Passkeys, u.Recovery)
+		}
+		if len(users) == 0 {
+			fmt.Println("nobody has a second step yet")
+		}
+		return nil
+	}
+	if *user == "" {
+		return errors.New("say who: -user ldap:anna (mfa-list shows the names)")
+	}
+	n, err := st.ResetFactors(ctx, strings.ToLower(*user))
+	if err != nil {
+		return err
+	}
+	_ = st.Audit(ctx, "command line", "mfa.reset", *user+": "+fmt.Sprint(n)+" devices", true)
+	fmt.Printf("%d devices of %s removed. Restart the server (systemctl restart pdu-monitor) to log that person out everywhere.\n", n, *user)
 	return nil
 }

@@ -57,7 +57,7 @@ function store(key, value) { try { if (value === undefined) return localStorage.
 const canOperate = () => S.session && ['operator', 'admin'].includes(S.session.user.role);
 const isAdmin = () => S.session && S.session.user.role === 'admin';
 
-class ApiError extends Error { constructor(status, message) { super(message); this.status = status; } }
+class ApiError extends Error { constructor(status, message, expired) { super(message); this.status = status; this.expired = !!expired; } }
 async function api(method, path, body) {
   const opt = { method, headers: {}, credentials: 'same-origin' };
   if (method !== 'GET') opt.headers['X-CSRF-Token'] = S.csrf;
@@ -68,8 +68,8 @@ async function api(method, path, body) {
   const r = await fetch(path, opt);
   let data = null;
   try { data = await r.json(); } catch (e) { /* no body */ }
-  if (r.status === 401 && path !== '/api/login') { stopPolling(); S.session = null; showLogin('Your session has ended: log in again.'); throw new ApiError(401, 'log in'); }
-  if (!r.ok) throw new ApiError(r.status, (data && data.error) || r.statusText);
+  if (r.status === 401 && !path.startsWith('/api/login')) { stopPolling(); S.session = null; showLogin('Your session has ended: log in again.'); throw new ApiError(401, 'log in'); }
+  if (!r.ok) throw new ApiError(r.status, (data && data.error) || r.statusText, data && data.expired);
   return data;
 }
 
@@ -174,13 +174,13 @@ function ensureShell(active) {
     setBanner(S.banner);
   }
   const { nav, who } = S.shell;
-  put(nav,
+  put(nav, S.session.limited ? null : [
     h('a', { href: '#/', class: active === 'overview' ? 'on' : '' }, 'Overview'),
     h('a', { href: '#/hosts', class: active === 'hosts' ? 'on' : '' }, 'Hosts'),
-    isAdmin() ? h('a', { href: '#/admin', class: active === 'admin' ? 'on' : '' }, 'Settings') : null);
+    isAdmin() ? h('a', { href: '#/admin', class: active === 'admin' ? 'on' : '' }, 'Settings') : null]);
   put(who,
     S.session.demo ? h('span', { class: 'demo-pill' }, 'DEMO') : null,
-    h('span', {}, `${S.session.user.displayName || S.session.user.name} · ${S.session.user.role}`),
+    h('a', { href: '#/security', class: 'whoami' + (active === 'security' ? ' on' : ''), title: 'Your login: second step, passkeys' }, `${S.session.user.displayName || S.session.user.name} · ${S.session.user.role}`),
     h('button', { class: 'small', onclick: logout }, 'Log out'));
   return S.shell.main;
 }
@@ -208,12 +208,14 @@ const routes = [
   [/^#\/pdu\/(\d+)$/, (m) => viewPDU(+m[1])],
   [/^#\/hosts$/, () => viewHosts()],
   [/^#\/host\/(\d+)$/, (m) => viewHost(+m[1])],
+  [/^#\/security$/, () => viewSecurity()],
   [/^#\/admin(?:\/(\w+))?$/, (m) => viewAdmin(m[1] || 'racks')],
 ];
 function route() {
   if (!S.session) return;
   stopPolling();
   const hash = location.hash || '#/';
+  if (S.session.limited && hash !== '#/security') { location.hash = '#/security'; return; } // the administrator requires a second step: only setting it up
   for (const [re, fn] of routes) {
     const m = hash.match(re);
     if (m) { fn(m).catch((e) => failed(e)); window.scrollTo(0, 0); return; }
@@ -223,6 +225,35 @@ function route() {
 window.addEventListener('hashchange', route);
 
 // ---------------------------------------------------------------- login
+// ---- passkeys (WebAuthn): the browser hands over binary values, the server speaks base64url
+const b64u = {
+  dec(text) { const t = text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4); return Uint8Array.from(atob(t), (c) => c.charCodeAt(0)).buffer; },
+  enc(buf) { let t = ''; new Uint8Array(buf).forEach((x) => { t += String.fromCharCode(x); }); return btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); },
+};
+const passkeysInBrowser = () => !!(window.PublicKeyCredential && navigator.credentials);
+function passkeyError(e) {
+  if (e && e.name === 'NotAllowedError') return 'The passkey was not used (cancelled, or it took too long). Try again.';
+  if (e && e.name === 'InvalidStateError') return 'This device has a passkey for this site already.';
+  if (e && e.name === 'SecurityError') return 'The browser refuses a passkey for this address: it must be the https address with the name of the server.';
+  return (e && e.message) || 'The passkey did not work.';
+}
+async function passkeyGet(options) {
+  const cred = await navigator.credentials.get({ publicKey: { challenge: b64u.dec(options.challenge), rpId: options.rpId, timeout: options.timeout, userVerification: options.userVerification,
+    allowCredentials: (options.allowCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) } });
+  return { id: b64u.enc(cred.rawId), clientDataJSON: b64u.enc(cred.response.clientDataJSON), authenticatorData: b64u.enc(cred.response.authenticatorData), signature: b64u.enc(cred.response.signature) };
+}
+async function passkeyCreate(options) {
+  const cred = await navigator.credentials.create({ publicKey: { challenge: b64u.dec(options.challenge), rp: options.rp, timeout: options.timeout, attestation: options.attestation,
+    user: { id: b64u.dec(options.user.id), name: options.user.name, displayName: options.user.displayName }, pubKeyCredParams: options.pubKeyCredParams,
+    authenticatorSelection: options.authenticatorSelection, excludeCredentials: (options.excludeCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) } });
+  return { id: b64u.enc(cred.rawId), clientDataJSON: b64u.enc(cred.response.clientDataJSON), attestationObject: b64u.enc(cred.response.attestationObject) };
+}
+
+function loggedIn(info) {
+  S.session = info; S.csrf = info.csrf; S.settings = info.settings || {};
+  route();
+}
+
 function showLogin(message) {
   S.shell = null;
   const user = h('input', { type: 'text', name: 'username', autocomplete: 'username', autofocus: true, required: true });
@@ -236,12 +267,55 @@ function showLogin(message) {
     go.disabled = true; err.textContent = '';
     try {
       const info = await api('POST', '/api/login', { username: user.value.trim(), password: pass.value });
-      S.session = info; S.csrf = info.csrf; S.settings = info.settings || {};
-      route();
+      if (info.mfa) { showSecondStep(info); return; }
+      loggedIn(info);
     } catch (e) { err.textContent = e.message; pass.value = ''; pass.focus(); } finally { go.disabled = false; }
   });
   app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'card' }, h('div', { class: 'brand' }, icon(), 'PDU Monitor'), h('p', { class: 'muted' }, 'Power and hosts of the data centre'), form)));
   user.focus();
+}
+
+// The password was right and the person has a second step: a code of the authenticator app, a passkey (fingerprint), or a recovery code.
+function showSecondStep(info) {
+  const m = info.methods || {};
+  let useRecovery = !m.totp && !m.passkey && m.recovery;
+  const code = h('input', { type: 'text', name: 'code', autocomplete: 'one-time-code', inputmode: useRecovery ? 'text' : 'numeric', required: true, autofocus: true, maxlength: 14 });
+  const label = h('div', { class: 'small muted' });
+  const err = h('div', { class: 'error', role: 'alert' });
+  const go = h('button', { class: 'primary', type: 'submit' }, 'Continue');
+  const finish = (e) => {
+    if (e instanceof ApiError && e.expired) { showLogin('The login took too long or had too many wrong codes: enter the password again.'); return; }
+    err.textContent = e.message;
+  };
+  const setLabel = () => { label.textContent = useRecovery ? 'Recovery code (one of the ten you saved)' : 'Code from the authenticator app (6 digits)'; code.setAttribute('inputmode', useRecovery ? 'text' : 'numeric'); };
+  setLabel();
+  const form = h('form', {}, m.totp || useRecovery ? h('label', {}, label, code) : null, err, m.totp || useRecovery ? go : null);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    go.disabled = true; err.textContent = '';
+    try {
+      loggedIn(await api('POST', '/api/login/mfa', { token: info.token, method: useRecovery ? 'recovery' : 'totp', code: code.value.trim() }));
+    } catch (e) { code.value = ''; code.focus(); finish(e); } finally { go.disabled = false; }
+  });
+  const extra = h('div', { style: 'display:grid;gap:8px;margin-top:12px' });
+  if (m.passkey && passkeysInBrowser()) {
+    extra.append(h('button', { type: 'button', class: m.totp ? '' : 'primary', onclick: async (ev) => {
+      ev.target.disabled = true; err.textContent = '';
+      try {
+        const q = await api('POST', '/api/login/passkey/begin', { token: info.token });
+        const a = await passkeyGet(q);
+        loggedIn(await api('POST', '/api/login/passkey/finish', { token: info.token, ...a }));
+      } catch (e) { if (e instanceof ApiError) finish(e); else err.textContent = passkeyError(e); } finally { ev.target.disabled = false; }
+    } }, 'Use a passkey (fingerprint, phone or security key)'));
+  } else if (m.passkey) {
+    extra.append(h('div', { class: 'note' }, 'This account has a passkey, but this browser or address cannot use it (it needs https and the name of the server).'));
+  }
+  if (m.recovery && (m.totp || m.passkey)) {
+    extra.append(h('button', { type: 'button', class: 'link', onclick: () => { useRecovery = !useRecovery; setLabel(); code.value = ''; code.focus(); put(form, h('label', {}, label, code), err, go); } }, 'I lost my device: use a recovery code'));
+  }
+  const cancel = h('button', { type: 'button', class: 'link', onclick: () => showLogin() }, 'Cancel');
+  app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'card' }, h('div', { class: 'brand' }, icon(), 'PDU Monitor'), h('p', { class: 'muted' }, `Second step for ${info.user}`), form, extra, h('div', { style: 'margin-top:10px' }, cancel))));
+  code.focus();
 }
 
 // ---------------------------------------------------------------- overview
@@ -657,6 +731,94 @@ async function viewHost(id) {
   startPolling(() => load().then(loadTop).then(loadIdle).catch(() => {}));
 }
 
+// ---------------------------------------------------------------- your login: the second step
+function qrImage(rows) {
+  const n = rows.length, q = 4; // four modules of white around it, as the standard asks
+  let d = '';
+  rows.forEach((row, y) => { for (let x = 0; x < n; x++) if (row[x] === '1') d += `M${x + q} ${y + q}h1v1h-1z`; });
+  return svg('svg', { viewBox: `0 0 ${n + 2 * q} ${n + 2 * q}`, width: 220, height: 220, role: 'img', 'aria-label': 'QR code to scan with the authenticator app', shapeRendering: 'crispEdges', style: 'background:#fff;border-radius:8px' },
+    svg('path', { d, fill: '#000' }));
+}
+function showRecoveryCodes(codes, intro) {
+  const text = codes.join('\n');
+  const copied = h('span', { class: 'c-ok small' });
+  return dialog('Recovery codes', h('div', {}, h('p', {}, intro || 'Keep these somewhere safe (a password manager, a printed page). Each one works once and is the way in when a phone is lost.'),
+    h('pre', { class: 'key', style: 'font-size:15px;line-height:1.7;letter-spacing:1px' }, text),
+    h('div', {}, h('button', { class: 'small', onclick: async () => { try { await navigator.clipboard.writeText(text); copied.textContent = ' Copied.'; } catch (e) { copied.className = 'error small'; copied.textContent = ' Select the codes and copy them by hand.'; } } }, 'Copy'), copied),
+    h('p', { class: 'note' }, 'They are shown only now: the server keeps no readable copy.')), [{ label: 'I have saved them', value: true, class: 'primary' }]);
+}
+
+async function viewSecurity() {
+  let st = await api('GET', '/api/me/mfa');
+  const reload = async () => { st = await api('GET', '/api/me/mfa'); S.session.limited = st.limited; draw(); };
+  const since = (iso) => datetime(iso);
+  async function remove(f) {
+    const ok = await confirmDialog(`Remove “${f.name}”?`, h('p', {}, f.kind === 'totp' ? 'The code of this authenticator app will no longer log anybody in.' : 'This passkey will no longer log anybody in.'), 'Remove', true);
+    if (!ok) return;
+    try { st = await api('DELETE', '/api/me/mfa/' + f.id); draw(); } catch (e) { setBanner({ title: 'Not removed', error: e.message, running: false }); }
+  }
+  async function afterAdd(r) {
+    st = r;
+    S.session.limited = r.limited; // a limited session became a full one
+    if (r.recoveryCodes && r.recoveryCodes.length) await showRecoveryCodes(r.recoveryCodes);
+    if (!S.session.limited && S.session.limitedBefore) { S.session.limitedBefore = false; location.hash = '#/'; S.shell = null; route(); return; }
+    draw();
+  }
+  async function addApp() {
+    const name = h('input', { value: '', placeholder: 'for example: phone', maxlength: 40, required: true });
+    const err = h('div', { class: 'error', role: 'alert' });
+    const ask = await dialog('Add an authenticator app', h('div', {}, h('p', {}, 'Any app that makes 6-digit codes works: Google Authenticator, Microsoft Authenticator, Authy, 1Password, Aegis… Give this device a name so that you know which one it is.'), field('Name', name)),
+      [{ label: 'Cancel', value: false }, { label: 'Next', value: true, class: 'primary' }]);
+    if (!ask) return;
+    let begin;
+    try { begin = await api('POST', '/api/me/mfa/totp/begin', { name: name.value.trim() }); } catch (e) { setBanner({ title: 'Could not start', error: e.message, running: false }); return; }
+    const code = h('input', { inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8, placeholder: '6 digits', required: true });
+    const body = h('div', { style: 'display:grid;gap:10px;justify-items:start' }, h('p', { style: 'margin:0' }, 'Scan this with the app, or type the key by hand. Then type the code that the app shows, to prove that it works.'),
+      qrImage(begin.qr), h('div', { class: 'small muted' }, 'Key by hand:'), h('code', { class: 'mono', style: 'word-break:break-all;user-select:all' }, begin.secret), field('Code from the app', code));
+    let result = null;
+    const ok = await formDialog('Add an authenticator app', body, 'Add it', async () => { result = await api('POST', '/api/me/mfa/totp/confirm', { code: code.value.trim() }); });
+    if (ok && result) await afterAdd(result);
+  }
+  async function addPasskey() {
+    if (!passkeysInBrowser()) { setBanner({ title: 'No passkeys here', error: 'This browser cannot make a passkey on this address (it needs https and the name of the server).', running: false }); return; }
+    const name = h('input', { value: '', placeholder: 'for example: laptop fingerprint', maxlength: 40, required: true });
+    const ask = await dialog('Add a passkey', h('div', {}, h('p', {}, 'A passkey is a fingerprint (Touch ID, Windows Hello), a phone or a security key. After you press Next the browser asks you to use it. It is asked after the password at every login.'), field('Name', name)),
+      [{ label: 'Cancel', value: false }, { label: 'Next', value: true, class: 'primary' }]);
+    if (!ask) return;
+    try {
+      const options = await api('POST', '/api/me/mfa/passkey/begin', { name: name.value.trim() });
+      const answer = await passkeyCreate(options);
+      await afterAdd(await api('POST', '/api/me/mfa/passkey/finish', answer));
+    } catch (e) { setBanner({ title: 'Passkey not added', error: e instanceof ApiError ? e.message : passkeyError(e), running: false }); }
+  }
+  async function newCodes() {
+    const ok = await confirmDialog('Make new recovery codes?', h('p', {}, 'The codes you have now stop working.'), 'Make new codes', false);
+    if (!ok) return;
+    try { const r = await api('POST', '/api/me/mfa/recovery', {}); st = r; await showRecoveryCodes(r.recoveryCodes); draw(); } catch (e) { setBanner({ title: 'Not made', error: e.message, running: false }); }
+  }
+  function draw() {
+    const apps = st.factors.filter((f) => f.kind === 'totp'), keys = st.factors.filter((f) => f.kind === 'passkey');
+    const row = (f) => h('tr', {}, h('td', { class: 'name' }, f.name), h('td', { class: 'muted' }, 'added ' + since(f.created)), h('td', { class: 'muted' }, f.lastUsed ? 'used ' + since(f.lastUsed) : 'not used yet'), h('td', { class: 'num' }, h('button', { class: 'small', onclick: () => remove(f) }, 'Remove')));
+    const table = (list) => list.length ? h('div', { class: 'tablewrap', style: 'box-shadow:none;margin-bottom:10px' }, h('table', {}, h('tbody', {}, list.map(row)))) : h('p', { class: 'muted small' }, 'None yet.');
+    const must = st.limited ? h('div', { class: 'notice bad', role: 'alert' }, 'The administrator requires a second step for the login. Add an authenticator app or a passkey to continue.')
+      : (st.require && !st.factors.length ? h('div', { class: 'notice' }, 'The administrator requires a second step for the login.') : null);
+    mount('security', h('div', { style: 'max-width:760px' }, h('h1', {}, 'Your login'), must,
+      h('p', { class: 'muted' }, st.factors.length ? 'Second step: on. After the password you are asked for a code or a passkey.' : 'Second step: off. Anybody who knows your password can log in.'),
+      h('div', { class: 'card', style: 'margin-bottom:14px' }, h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Authenticator apps'), h('div', { class: 'spacer' }),
+        h('button', { class: 'primary', disabled: apps.length >= st.max, onclick: addApp }, 'Add an authenticator app')),
+        table(apps), h('p', { class: 'note' }, `Up to ${st.max} devices, each with its own key, so that a lost phone can be removed alone.`)),
+      h('div', { class: 'card', style: 'margin-bottom:14px' }, h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Passkeys (fingerprint, phone, security key)'), h('div', { class: 'spacer' }),
+        h('button', { class: 'primary', disabled: keys.length >= st.max || !st.passkeys, onclick: addPasskey }, 'Add a passkey')),
+        table(keys),
+        !st.passkeys ? h('p', { class: 'note' }, 'Passkeys are not set up on this server: an administrator adds public_url: https://the-name-of-this-server to config.yaml and restarts it.') : h('p', { class: 'note' }, `Up to ${st.max}. Your laptop's fingerprint reader counts: choose “this device” in the browser's question.`)),
+      h('div', { class: 'card' }, h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Recovery codes'), h('div', { class: 'spacer' }),
+        h('button', { disabled: !st.factors.length, onclick: newCodes }, 'Make new codes')),
+        h('p', { class: st.factors.length && st.recovery < 3 ? 'c-warning' : 'muted' }, st.factors.length ? `${st.recovery} unused code${st.recovery === 1 ? '' : 's'}. They are the way in when a phone is lost.` : 'Made when you add the first device.'))));
+  }
+  S.session.limitedBefore = !!st.limited;
+  draw();
+}
+
 // ---------------------------------------------------------------- settings (administrators)
 // A form in a dialog that stays open (and shows the reason) when saving fails.
 function formDialog(title, body, saveLabel, onSave, extraButtons) {
@@ -681,7 +843,7 @@ const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return N
 
 async function viewAdmin(tab) {
   if (!isAdmin()) { mount('', h('div', { class: 'card' }, 'Only administrators can change the settings.')); return; }
-  const tabs = [['racks', 'Racks'], ['pdus', 'PDUs'], ['hosts', 'Hosts'], ['names', 'Names'], ['settings', 'Settings'], ['software', 'Software'], ['import', 'Import'], ['audit', 'Log']];
+  const tabs = [['racks', 'Racks'], ['pdus', 'PDUs'], ['hosts', 'Hosts'], ['names', 'Names'], ['settings', 'Settings'], ['users', 'Users'], ['software', 'Software'], ['import', 'Import'], ['audit', 'Log']];
   if (!tabs.some((t) => t[0] === tab)) tab = 'racks';
   const nav = h('div', { class: 'tabs' }, tabs.map(([k, v]) => h('a', { href: '#/admin/' + k, class: k === tab ? 'on' : '' }, v)));
   const body = h('div');
@@ -690,6 +852,7 @@ async function viewAdmin(tab) {
   if (tab === 'audit') return adminAudit(body);
   if (tab === 'names') return adminNames(body);
   if (tab === 'software') return adminSoftware(body);
+  if (tab === 'users') return adminUsers(body);
   if (tab === 'import') return adminImport(body, reload);
   const cfg = await api('GET', '/api/admin/config');
   if (tab === 'racks') adminRacks(body, cfg, reload);
@@ -819,6 +982,7 @@ function adminSettings(body, cfg, reload) {
   const inp = (v) => h('input', { value: String(v), inputmode: 'numeric', size: 6 });
   const poll = inp(s.pollSeconds), hostPoll = inp(s.hostPollSeconds), warn = inp(s.warnPercent), delay = inp(s.restartDelaySeconds), keep = inp(s.sampleRetentionDays);
   const smPoll = inp(s.servmanPollMinutes), smSync = inp(s.servmanSyncMinutes);
+  const stay = inp(s.sessionHours == null ? 72 : s.sessionHours), requireMfa = h('input', { type: 'checkbox', checked: !!s.requireMfa });
   const smFormat = h('select', {}, h('option', { value: 'ccid' }, 'Rack unit id only: 200U13'), h('option', { value: 'ccid_name' }, 'Id and machine name: 200U13 a42sf'));
   smFormat.value = s.servmanNameFormat || 'ccid';
   const saved = h('span', { class: 'c-ok small' });
@@ -826,8 +990,8 @@ function adminSettings(body, cfg, reload) {
     saved.textContent = '';
     try {
       const r = await api('PUT', '/api/admin/settings', { pollSeconds: +poll.value, hostPollSeconds: +hostPoll.value, warnPercent: +warn.value, restartDelaySeconds: +delay.value, sampleRetentionDays: +keep.value,
-        servmanPollMinutes: +smPoll.value, servmanSyncMinutes: +smSync.value, servmanNameFormat: smFormat.value });
-      S.settings = { warnPercent: r.warnPercent, restartDelaySeconds: r.restartDelaySeconds, pollSeconds: r.pollSeconds };
+        servmanPollMinutes: +smPoll.value, servmanSyncMinutes: +smSync.value, servmanNameFormat: smFormat.value, sessionHours: +stay.value, requireMfa: requireMfa.checked });
+      S.settings = { warnPercent: r.warnPercent, restartDelaySeconds: r.restartDelaySeconds, pollSeconds: r.pollSeconds, requireMfa: r.requireMfa };
       saved.textContent = 'Saved.';
     } catch (e) { saved.className = 'error small'; saved.textContent = e.message; }
   } }, 'Save');
@@ -835,6 +999,9 @@ function adminSettings(body, cfg, reload) {
     field('PDU reading (s)', poll, 'How often the PDUs are asked.'), field('Host reading (s)', hostPoll, 'How often the agents of the hosts are read. An agent takes a new sample once a minute: reading more often only repeats the same data.'),
     field('Warn at (%)', warn, 'Of the limit; above it a rack or PDU is shown as high.'), field('Restart pause (s)', delay, 'Between switching off and on again (5–10 is usual).'),
     field('Keep history (days)', keep),
+    h('h3', { style: 'margin:18px 0 4px' }, 'Login'),
+    field('Stay logged in (hours)', stay, 'How long a login lasts, in hours (72 = three days). Applies at once, also to people who are logged in.'),
+    field('Second step for everybody', requireMfa, 'Anybody without an authenticator app or a passkey must add one right after the password, before they can see anything. The emergency local account is not forced.'),
     h('h3', { style: 'margin:18px 0 4px' }, 'Names of the outlets (from servman)'),
     field('Ask servman every (min)', smPoll, 'Compares servman with the PDUs, shows the plan under Names and the conflicts on the overview. 0 = never by itself.'),
     field('Write to the PDUs every (min)', smSync, 'Writes the planned names to the PDUs by itself. 0 = only when you press the button under Names.'),
@@ -842,6 +1009,23 @@ function adminSettings(body, cfg, reload) {
     h('div', { class: 'actionbar' }, save, saved)));
 }
 
+
+
+// Who has a second step; the administrator removes it for somebody who lost every device (and who has no recovery codes left).
+async function adminUsers(body) {
+  const r = await api('GET', '/api/admin/mfa');
+  const users = r.users || [];
+  async function reset(u) {
+    const ok = await confirmDialog(`Remove the second step of ${u.user}?`, h('div', {}, h('p', {}, 'Their authenticator apps, passkeys and recovery codes are deleted and they are logged out everywhere. At the next login the password is enough' + (S.settings && S.settings.requireMfa ? ' (and a new second step is asked for)' : '') + '.'),
+      h('div', { class: 'effect' }, 'Do this only when you are sure that the person is who they say they are.')), 'Remove', true);
+    if (!ok) return;
+    try { await api('DELETE', '/api/admin/mfa?user=' + encodeURIComponent(u.user)); adminUsers(body).catch(() => {}); } catch (e) { setBanner({ title: 'Not removed', error: e.message, running: false }); }
+  }
+  body.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Second step of the login'),
+    users.length ? h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, ['Person', 'Authenticator apps', 'Passkeys', 'Recovery codes left', ''].map((t) => h('th', {}, t)))),
+      h('tbody', {}, users.map((u) => h('tr', {}, h('td', { class: 'name' }, u.user), h('td', { class: 'num' }, u.totp), h('td', { class: 'num' }, u.passkeys), h('td', { class: 'num' }, u.recovery), h('td', { class: 'num' }, h('button', { class: 'small', onclick: () => reset(u) }, 'Remove it'))))))) : h('p', { class: 'muted' }, 'Nobody has set up a second step yet. People do it under their name at the top right.'),
+    h('p', { class: 'note' }, 'When nobody can log in: on this server, pdumonitord mfa-list and pdumonitord mfa-reset -user ldap:NAME (see the README).')));
+}
 
 // ---- names of the outlets: servman says which server is on which outlet, the PDUs are named after it
 async function adminNames(body) {

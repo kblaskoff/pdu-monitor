@@ -139,8 +139,8 @@ sudo systemctl restart pdu-monitor
 ## Directory (LDAP) login
 
 Only people who belong to a group named in `ldap.roles` can log in. A wrong user or password gets "wrong user or password"; a
-right password of somebody outside the groups gets "this account is not in a group that may use this application". Roles: `admin` (everything), `operator` (switch outlets, rename), `viewer` (look). The decision is "admins only" for now:
-only `admin: [admins]` is configured.
+right password of somebody outside the groups gets "this account is not in a group that may use this application". Roles: `admin` (everything), `operator` (switch outlets, rename), `viewer` (look). Several groups can be named, one list per role:
+`roles:` with `admin: [admins]`, `operator: [group-a]`, `viewer: [group-b]` (a person in more than one group gets the highest role).
 
 * OpenLDAP: `user_filter: "(uid={username})"`, set `group_base` (groups with `member`, `uniqueMember` or `memberUid`), or `member_of_attr: memberOf` if
   the memberof overlay is on.
@@ -152,6 +152,25 @@ only `admin: [admins]` is configured.
 
 The emergency account (`local_admin`) works without the directory; make its hash with `pdumonitord hash-password`. Leave it out if
 you do not want one.
+
+## Second step of the login, passkeys, how long a login lasts
+
+After the password a person can be asked for a second step (the top right, under the name: **Your login**):
+
+* **Authenticator apps** (6-digit codes: Google Authenticator, Microsoft Authenticator, Authy, 1Password…): up to **3 devices** per person, each with its own
+  key (so a lost phone is removed alone). The QR code is drawn by the page itself; nothing is sent to anybody else. A code is accepted once.
+* **Passkeys** (up to 3 per person): the fingerprint reader of a laptop (Touch ID, Windows Hello), a phone, a security key. The browser asks for the
+  fingerprint after the password; the fingerprint (or the PIN) must have been checked, or the passkey is refused. Passkeys are tied to the *name*
+  of the site and need https, so add the address people type to `config.yaml` and restart (a host name, not an IP address):
+  `public_url: https://pdu.example.com:8443`. Without it the authenticator apps work and the page says why passkeys are off.
+* **Recovery codes** (10, made with the first device, shown once, each works once): the way in when a phone is lost.
+* **Settings → Settings → Login:** *Second step for everybody* (anybody without one must add one right after the password and sees nothing else until
+  then; the emergency local account is not forced), and *Stay logged in (hours)*, default **72** (three days), applies at once. Sessions are kept in the
+  database, so an update or a restart of the server does not log anybody out.
+* **Settings → Users** lists who has a second step and removes it for somebody who lost every device and every recovery code (they are logged out everywhere).
+  When no administrator can log in: `sudo -u pdumonitor pdumonitord mfa-list -config /etc/pdu-monitor/config.yaml` and
+  `… mfa-reset -config … -user ldap:NAME`, then `systemctl restart pdu-monitor`.
+* Wrong codes are limited: five for one password check, eight in 15 minutes for one person.
 
 ## Hypervisors
 

@@ -114,3 +114,24 @@ func TestServmanSection(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicURLForPasskeys(t *testing.T) {
+	good := map[string][2]string{
+		"https://pdu.example.com":      {"pdu.example.com", "https://pdu.example.com"},
+		"https://pdu.example.com:8443": {"pdu.example.com", "https://pdu.example.com:8443"},
+		"https://pdu.example.com/":     {"pdu.example.com", "https://pdu.example.com"},
+		"http://localhost:8080":        {"localhost", "http://localhost:8080"},
+	}
+	for url, want := range good {
+		c := &Config{PublicURL: url}
+		id, origin, err := c.RelyingParty()
+		if err != nil || id != want[0] || origin != want[1] {
+			t.Errorf("%s: %q %q %v", url, id, origin, err)
+		}
+	}
+	for _, url := range []string{"http://pdu.example.com", "https://10.0.0.5:8443", "https://[::1]:8443", "pdu.example.com", "https://pdu.example.com/path", "https://u:p@pdu.example.com", "ftp://x.example.com", "https://pdu.example.com?x=1"} {
+		if _, _, err := (&Config{PublicURL: url}).RelyingParty(); err == nil {
+			t.Errorf("%s accepted", url)
+		}
+	}
+}

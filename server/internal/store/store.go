@@ -43,6 +43,16 @@ var migrations = []string{
 	// hosts is about 175 000 rows. Kept on the server, so that it does not depend on how long an agent keeps its own files.
 	`CREATE TABLE host_idle (host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, hour INTEGER NOT NULL,
 		sum REAL NOT NULL, n INTEGER NOT NULL, min REAL NOT NULL, PRIMARY KEY (host_id, hour));`,
+	// 4: the second step of the login (authenticator apps and passkeys), the recovery codes, and the sessions (kept here so that a restart
+	// of the server, which an update makes, does not log everybody out). Only the hash of a session token is stored, as in memory.
+	`CREATE TABLE auth_factors (id INTEGER PRIMARY KEY, user TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
+		secret_enc BLOB, cred_id BLOB, public_key BLOB, sign_count INTEGER NOT NULL DEFAULT 0, last_step INTEGER NOT NULL DEFAULT 0,
+		created INTEGER NOT NULL, last_used INTEGER NOT NULL DEFAULT 0);
+	 CREATE INDEX auth_factors_user ON auth_factors(user);
+	 CREATE UNIQUE INDEX auth_factors_cred ON auth_factors(cred_id) WHERE cred_id IS NOT NULL;
+	 CREATE TABLE recovery_codes (user TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (user, hash));
+	 CREATE TABLE sessions (key TEXT PRIMARY KEY, user_json TEXT NOT NULL, csrf TEXT NOT NULL, created INTEGER NOT NULL,
+		last_seen INTEGER NOT NULL, ip TEXT NOT NULL, mfa INTEGER NOT NULL DEFAULT 0, limited INTEGER NOT NULL DEFAULT 0);`,
 }
 
 // Open opens (and creates) the database file. secrets may be nil only in tests that never store communities.
@@ -513,6 +523,9 @@ type Settings struct {
 	ServmanPollMinutes int    `json:"servmanPollMinutes"` // how often servman is asked and the plan made; 0 = never by itself
 	ServmanSyncMinutes int    `json:"servmanSyncMinutes"` // how often the planned names are written to the PDUs; 0 = only when an administrator presses the button
 	ServmanNameFormat  string `json:"servmanNameFormat"`  // "ccid" (200U13) or "ccid_name" (200U13 a42sf)
+	// Login: how long a person stays logged in (without and with using the application), and whether the second step is a must.
+	SessionHours int  `json:"sessionHours"`
+	RequireMFA   bool `json:"requireMfa"` // everybody must have an authenticator app or a passkey (the emergency local account is not forced)
 }
 
 // The two forms of an outlet name.
@@ -523,7 +536,7 @@ const (
 
 func DefaultSettings() Settings {
 	return Settings{PollSeconds: 10, HostPollSeconds: 60, WarnPercent: 80, RestartDelaySecond: 8, SampleRetentionDay: 90,
-		ServmanPollMinutes: 15, ServmanSyncMinutes: 0, ServmanNameFormat: NameCCID}
+		ServmanPollMinutes: 15, ServmanSyncMinutes: 0, ServmanNameFormat: NameCCID, SessionHours: 72}
 }
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {
@@ -557,6 +570,7 @@ func (st Settings) sane() Settings {
 	st.SampleRetentionDay = clamp(st.SampleRetentionDay, 1, 3650, d.SampleRetentionDay)
 	st.ServmanPollMinutes = clamp(st.ServmanPollMinutes, 0, 1440, d.ServmanPollMinutes)
 	st.ServmanSyncMinutes = clamp(st.ServmanSyncMinutes, 0, 10080, d.ServmanSyncMinutes)
+	st.SessionHours = clamp(st.SessionHours, 1, 720, d.SessionHours)
 	if st.ServmanNameFormat != NameCCID && st.ServmanNameFormat != NameCCIDName {
 		st.ServmanNameFormat = d.ServmanNameFormat
 	}

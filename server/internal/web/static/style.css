@@ -188,3 +188,6 @@ details.card summary { cursor: pointer; font-weight: 600; }
 .idlebars:not(.weeks) .col .v { display: block; }
 .idlebars .col em { position: absolute; bottom: 0; left: 0; right: 0; height: 16px; font-style: normal; font-size: 11px; color: var(--muted); text-align: center; white-space: nowrap; overflow: visible; }
 .idlebars .col:hover { background: var(--panel2); }
+.who .whoami { color: var(--text); font-weight: 550; margin-right: 6px; }
+.who .whoami:hover, .who .whoami.on { text-decoration: underline; }
+.login .card button.link { display: block; }

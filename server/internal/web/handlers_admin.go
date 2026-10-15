@@ -295,6 +295,8 @@ func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, sess 
 		return
 	}
 	_ = s.Store.Audit(r.Context(), sess.User.Name, "settings", fmt.Sprintf("%+v", saved), true)
+	d := time.Duration(saved.SessionHours) * time.Hour
+	s.Sessions.SetLimits(d, d)
 	writeJSON(w, 200, saved)
 }
 
