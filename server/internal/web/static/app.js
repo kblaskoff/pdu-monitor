@@ -237,9 +237,11 @@ function passkeyError(e) {
   if (e && e.name === 'SecurityError') return 'The browser refuses a passkey for this address: it must be the https address with the name of the server.';
   return (e && e.message) || 'The passkey did not work.';
 }
-async function passkeyGet(options) {
+// listed: ask for the passkeys of this person by id (what a security key needs); not listed: the browser shows every passkey it can find for this
+// site, from the laptop, the phone, and the password managers (iCloud, LastPass, 1Password, Bitwarden…), which often do not answer a list.
+async function passkeyGet(options, listed) {
   const cred = await navigator.credentials.get({ publicKey: { challenge: b64u.dec(options.challenge), rpId: options.rpId, timeout: options.timeout, userVerification: options.userVerification,
-    allowCredentials: (options.allowCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) } });
+    allowCredentials: listed ? (options.allowCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) : [] } });
   return { id: b64u.enc(cred.rawId), clientDataJSON: b64u.enc(cred.response.clientDataJSON), authenticatorData: b64u.enc(cred.response.authenticatorData), signature: b64u.enc(cred.response.signature) };
 }
 async function passkeyCreate(options) {
@@ -299,14 +301,16 @@ function showSecondStep(info) {
   });
   const extra = h('div', { style: 'display:grid;gap:8px;margin-top:12px' });
   if (m.passkey && passkeysInBrowser()) {
-    extra.append(h('button', { type: 'button', class: m.totp ? '' : 'primary', onclick: async (ev) => {
+    const use = (listed) => async (ev) => {
       ev.target.disabled = true; err.textContent = '';
       try {
         const q = await api('POST', '/api/login/passkey/begin', { token: info.token });
-        const a = await passkeyGet(q);
+        const a = await passkeyGet(q, listed);
         loggedIn(await api('POST', '/api/login/passkey/finish', { token: info.token, ...a }));
       } catch (e) { if (e instanceof ApiError) finish(e); else err.textContent = passkeyError(e); } finally { ev.target.disabled = false; }
-    } }, 'Use a passkey (fingerprint, phone or security key)'));
+    };
+    extra.append(h('button', { type: 'button', class: m.totp ? '' : 'primary', onclick: use(false) }, 'Use a passkey (fingerprint, phone, iCloud, LastPass…)'));
+    extra.append(h('button', { type: 'button', class: 'link', onclick: use(true), title: 'A security key (USB, NFC) is found by its id: use this if the button above does not find it' }, 'Use a security key'));
   } else if (m.passkey) {
     extra.append(h('div', { class: 'note' }, 'This account has a passkey, but this browser or address cannot use it (it needs https and the name of the server).'));
   }

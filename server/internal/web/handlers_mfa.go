@@ -365,7 +365,7 @@ func (s *Server) handleLoginPasskeyFinish(w http.ResponseWriter, r *http.Request
 	ad, e3 := webauthn.Decode(req.AuthenticatorData)
 	sig, e4 := webauthn.Decode(req.Signature)
 	if s.RP == nil || challenge == nil || e1 != nil || e2 != nil || e3 != nil || e4 != nil {
-		s.mfaWrong(w, r, p, req.Token, key, "passkey (no question or a broken answer)")
+		s.mfaWrong(w, r, p, req.Token, key, "passkey (no open question, or a broken answer)")
 		return
 	}
 	factors, err := s.Store.Factors(r.Context(), auth.UserKey(p.user))
@@ -373,22 +373,31 @@ func (s *Server) handleLoginPasskeyFinish(w http.ResponseWriter, r *http.Request
 		writeError(w, 500, err.Error())
 		return
 	}
+	reason := "this passkey is not one of yours (the id is not known for this person)"
 	for _, f := range factors {
 		if f.Kind != store.FactorPasskey || string(f.CredID) != string(id) {
 			continue
 		}
 		count, err := s.RP.VerifyAssertion(challenge, f.PublicKey, f.SignCount, cd, ad, sig)
 		if err != nil {
-			s.logf("passkey of " + p.user.Name + ": " + err.Error())
+			reason = err.Error()
 			break
 		}
 		if used, _ := s.Store.UsePasskeyCount(r.Context(), f.ID, count); !used {
+			reason = "the counter of the passkey did not go up"
 			break
 		}
 		s.mfaPassed(w, r, p, req.Token, key, "passkey “"+f.Name+"”")
 		return
 	}
-	s.mfaWrong(w, r, p, req.Token, key, "passkey")
+	// Why a passkey was refused says nothing that helps somebody who does not have it, and it is what a person needs to fix the setup
+	// (a password manager that does not verify the person, another address): so it is told, and kept in the log.
+	s.mfa.fail(req.Token)
+	s.byMFA.Fail(key)
+	s.byIP.Fail("ip:" + remoteIP(r))
+	_ = s.Store.Audit(r.Context(), p.user.Name, "login.mfa.failed", "passkey: "+reason, false)
+	time.Sleep(s.FailureDelay)
+	writeError(w, http.StatusUnauthorized, "the passkey was refused: "+reason)
 }
 
 // ---- setting up (a person who is logged in; a limited session may do only this)

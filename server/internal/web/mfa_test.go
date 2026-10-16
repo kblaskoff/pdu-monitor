@@ -464,8 +464,8 @@ func TestPasskeySecondStep(t *testing.T) {
 	_, q = c2.call("POST", "/api/login/passkey/begin", map[string]any{"token": out["token"]}, true)
 	weak := key.assert(q, rpOrigin, 0x01)
 	weak["token"] = out["token"]
-	if status, _ := c2.call("POST", "/api/login/passkey/finish", weak, true); status != 401 {
-		t.Errorf("no user verification: %d", status)
+	if status, out := c2.call("POST", "/api/login/passkey/finish", weak, true); status != 401 || !strings.Contains(out["error"].(string), "not verified") {
+		t.Errorf("no user verification: %d %v (the reason must be told: it is what fixes a password manager that does not verify)", status, out)
 	}
 	// an answer to another question
 	c3 := e.anonymous()
