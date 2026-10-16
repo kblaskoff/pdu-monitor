@@ -231,7 +231,19 @@ const b64u = {
   enc(buf) { let t = ''; new Uint8Array(buf).forEach((x) => { t += String.fromCharCode(x); }); return btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); },
 };
 const passkeysInBrowser = () => !!(window.PublicKeyCredential && navigator.credentials);
+// One question to the browser at a time: a password manager that never answers leaves the first one open, and the browser then says
+// "A request is already pending". A new question cancels the old one, and none waits for more than two minutes.
+let passkeyAsk = null;
+function passkeySignal() {
+  if (passkeyAsk) passkeyAsk.abort();
+  const ctl = new AbortController();
+  passkeyAsk = ctl;
+  setTimeout(() => ctl.abort(), 120000);
+  return ctl.signal;
+}
 function passkeyError(e) {
+  if (e && e.name === 'AbortError') return 'Stopped waiting for the passkey. Try again, or use a code.';
+  if (e && /pending/i.test(e.message || '')) return 'The browser is still waiting for an earlier passkey question (a password manager may hold it). Reload the page and use another method, or try again.';
   if (e && e.name === 'NotAllowedError') return 'The passkey was not used (cancelled, or it took too long). Try again.';
   if (e && e.name === 'InvalidStateError') return 'This device has a passkey for this site already.';
   if (e && e.name === 'SecurityError') return 'The browser refuses a passkey for this address: it must be the https address with the name of the server.';
@@ -241,13 +253,13 @@ function passkeyError(e) {
 // site, from the laptop, the phone, and the password managers (iCloud, LastPass, 1Password, Bitwarden…), which often do not answer a list.
 async function passkeyGet(options, listed) {
   const cred = await navigator.credentials.get({ publicKey: { challenge: b64u.dec(options.challenge), rpId: options.rpId, timeout: options.timeout, userVerification: options.userVerification,
-    allowCredentials: listed ? (options.allowCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) : [] } });
+    allowCredentials: listed ? (options.allowCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) : [] }, signal: passkeySignal() });
   return { id: b64u.enc(cred.rawId), clientDataJSON: b64u.enc(cred.response.clientDataJSON), authenticatorData: b64u.enc(cred.response.authenticatorData), signature: b64u.enc(cred.response.signature) };
 }
 async function passkeyCreate(options) {
   const cred = await navigator.credentials.create({ publicKey: { challenge: b64u.dec(options.challenge), rp: options.rp, timeout: options.timeout, attestation: options.attestation,
     user: { id: b64u.dec(options.user.id), name: options.user.name, displayName: options.user.displayName }, pubKeyCredParams: options.pubKeyCredParams,
-    authenticatorSelection: options.authenticatorSelection, excludeCredentials: (options.excludeCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) } });
+    authenticatorSelection: options.authenticatorSelection, excludeCredentials: (options.excludeCredentials || []).map((c) => ({ type: c.type, id: b64u.dec(c.id) })) }, signal: passkeySignal() });
   return { id: b64u.enc(cred.rawId), clientDataJSON: b64u.enc(cred.response.clientDataJSON), attestationObject: b64u.enc(cred.response.attestationObject) };
 }
 
@@ -301,13 +313,15 @@ function showSecondStep(info) {
   });
   const extra = h('div', { style: 'display:grid;gap:8px;margin-top:12px' });
   if (m.passkey && passkeysInBrowser()) {
-    const use = (listed) => async (ev) => {
-      ev.target.disabled = true; err.textContent = '';
+    // The buttons stay usable while the browser waits: a click again cancels the old question and asks anew (a password manager that never
+    // answers must not lock the person out of the other ways).
+    const use = (listed) => async () => {
+      err.textContent = 'Waiting for the passkey… (click again to ask again, or use a code)';
       try {
         const q = await api('POST', '/api/login/passkey/begin', { token: info.token });
         const a = await passkeyGet(q, listed);
         loggedIn(await api('POST', '/api/login/passkey/finish', { token: info.token, ...a }));
-      } catch (e) { if (e instanceof ApiError) finish(e); else err.textContent = passkeyError(e); } finally { ev.target.disabled = false; }
+      } catch (e) { if (e instanceof ApiError) finish(e); else if (!(e && e.name === 'AbortError')) err.textContent = passkeyError(e); }
     };
     extra.append(h('button', { type: 'button', class: m.totp ? '' : 'primary', onclick: use(false) }, 'Use a passkey (fingerprint, phone, iCloud, LastPass…)'));
     extra.append(h('button', { type: 'button', class: 'link', onclick: use(true), title: 'A security key (USB, NFC) is found by its id: use this if the button above does not find it' }, 'Use a security key'));
@@ -317,7 +331,7 @@ function showSecondStep(info) {
   if (m.recovery && (m.totp || m.passkey)) {
     extra.append(h('button', { type: 'button', class: 'link', onclick: () => { useRecovery = !useRecovery; setLabel(); code.value = ''; code.focus(); put(form, h('label', {}, label, code), err, go); } }, 'I lost my device: use a recovery code'));
   }
-  const cancel = h('button', { type: 'button', class: 'link', onclick: () => showLogin() }, 'Cancel');
+  const cancel = h('button', { type: 'button', class: 'link', onclick: () => { if (passkeyAsk) passkeyAsk.abort(); showLogin(); } }, 'Cancel');
   app.replaceChildren(h('div', { class: 'login' }, h('div', { class: 'card' }, h('div', { class: 'brand' }, icon(), 'PDU Monitor'), h('p', { class: 'muted' }, `Second step for ${info.user}`), form, extra, h('div', { style: 'margin-top:10px' }, cancel))));
   code.focus();
 }

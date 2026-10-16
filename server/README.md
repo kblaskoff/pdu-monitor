@@ -163,6 +163,8 @@ After the password a person can be asked for a second step (the top right, under
   fingerprint after the password; the fingerprint (or the PIN) must have been checked, or the passkey is refused. Passkeys are tied to the *name*
   of the site and need https, so add the address people type to `config.yaml` and restart (a host name, not an IP address):
   `public_url: https://pdu.example.com:8443`. Without it the authenticator apps work and the page says why passkeys are off.
+* A password manager that does not answer the browser (seen with LastPass) leaves the question open; the page lets you ask again or use a code, and the
+  iCloud / laptop passkeys or an authenticator app keep working. Passkeys made by a password manager are only as good as its extension: use one that works.
 * **Recovery codes** (10, made with the first device, shown once, each works once): the way in when a phone is lost.
 * **Settings → Settings → Login:** *Second step for everybody* (anybody without one must add one right after the password and sees nothing else until
   then; the emergency local account is not forced), and *Stay logged in (hours)*, default **72** (three days), applies at once. Sessions are kept in the
