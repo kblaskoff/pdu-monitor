@@ -158,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsGet))
 	mux.HandleFunc("PUT /api/admin/settings", s.api(auth.RoleAdmin, s.handleSettingsPut))
 	mux.HandleFunc("POST /api/admin/import", s.api(auth.RoleAdmin, s.handleImport))
+	mux.HandleFunc("PUT /api/me/prefs", s.api(auth.RoleViewer, s.handlePrefsPut))
 	mux.HandleFunc("POST /api/login/mfa", s.handleLoginMFA)
 	mux.HandleFunc("POST /api/login/passkey/begin", s.handleLoginPasskeyBegin)
 	mux.HandleFunc("POST /api/login/passkey/finish", s.handleLoginPasskeyFinish)
@@ -329,7 +330,7 @@ type loginRequest struct {
 
 func (s *Server) sessionInfo(sess *auth.Session) map[string]any {
 	st, _ := s.Store.Settings(context.Background())
-	return map[string]any{"user": sess.User, "csrf": sess.CSRF, "demo": s.Demo, "version": s.Version, "mfa": sess.MFA, "limited": sess.IsLimited(),
+	return map[string]any{"user": sess.User, "csrf": sess.CSRF, "demo": s.Demo, "version": s.Version, "mfa": sess.MFA, "limited": sess.IsLimited(), "prefs": s.prefsOf(sess),
 		"settings": map[string]any{"warnPercent": st.WarnPercent, "restartDelaySeconds": st.RestartDelaySecond, "pollSeconds": st.PollSeconds}}
 }
 

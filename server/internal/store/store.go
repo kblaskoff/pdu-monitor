@@ -53,6 +53,8 @@ var migrations = []string{
 	 CREATE TABLE recovery_codes (user TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (user, hash));
 	 CREATE TABLE sessions (key TEXT PRIMARY KEY, user_json TEXT NOT NULL, csrf TEXT NOT NULL, created INTEGER NOT NULL,
 		last_seen INTEGER NOT NULL, ip TEXT NOT NULL, mfa INTEGER NOT NULL DEFAULT 0, limited INTEGER NOT NULL DEFAULT 0);`,
+	// 5: how a person likes to see things (per person, not for everybody): for now how CPU idle is shown
+	`CREATE TABLE user_prefs (user TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user, key));`,
 }
 
 // Open opens (and creates) the database file. secrets may be nil only in tests that never store communities.

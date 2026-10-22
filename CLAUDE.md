@@ -68,6 +68,9 @@ Three parts in one repository:
   (sum, readings, lowest) of the idle % it already reads every minute in table `host_idle` (`store/idle.go`, migration 3; `app/idle.go` keeps the
   current hour in memory, flushes every 5 min and on shutdown; 400 days of retention). No extra load on the hosts, about 8,760 rows per host and year.
   It fills from the day this was installed (no backfill). Days/weeks are cut in the time zone of the viewer's browser. API `GET /api/hosts/{id}/idle?range=14d|1y&tz=`.
+* **CPU idle is shown in two ways, a per-person choice** (table `user_prefs`, key `cpuIdleMode` = `raw` | `threads`, `PUT /api/me/prefs`, in the session info): the hosts have
+  hyper-threads, so ~50 % reported idle is full in practice (the owner's words: "50% = critical, we count it as 0"). `threads` = max(0, (idle - 50) * 2). Colours (same state in
+  both): red below 55 % reported, orange below 60 % (10 / 20 after the conversion). Applies to the hosts list, the host card, the rack view line and the history bars.
 * **Updates from the web (Settings → Software)** (tried on the real central server: works; the table of the agent versions of all hosts is on the same tab) (the owner's decisions: built locally from a clone, by a button not by a timer, no SSH, a minute or two of delay is fine):
   the version is the git commit (`internal/buildinfo`, from `debug.ReadBuildInfo`; no ldflags). The application never runs anything: it writes
   `update-request` into its data dir (`internal/updater`), and a **root** systemd path unit starts `deploy/update.sh` (installed as

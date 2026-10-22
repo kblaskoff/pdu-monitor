@@ -181,6 +181,12 @@ Settings → Hosts shows the install command with the key of this server (the sa
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host and paste it to confirm. Without that confirmation nothing is read:
 this is what stops somebody on the network from pretending to be a hypervisor.
 
+**CPU idle and threads.** The hosts have hyper-threads, which add much less than a real core: a host that reports 50 % idle has no room left in
+practice. Every person chooses for themselves (*As reported* / *Threads discounted*, on the hosts list, on the host page, or under their name → "How you see CPU
+idle"; kept on the server per person): *As reported* is what the host says, 0-100; *Threads discounted* shows 50 % reported as 0 % and 100 % as 100 % (90 % reported
+is 80 %). The colours are the same state in both: red at 55 % reported or less (10 % discounted), orange under 60 % (20 %). The history bars, the list, the card of
+a host and the "% cpu" in the rack view follow the choice; the tooltip of a bar says what the host reported.
+
 The page of a host shows **CPU idle %** per day for the last 14 days and per week for the last year. The server builds it from the readings
 it already takes (hourly averages in its database, about 9,000 small rows per host and year, kept 400 days), so it costs the hosts nothing
 and the history starts on the day the server was updated.

@@ -448,7 +448,7 @@ async function viewRack(id) {
         h('td', {}, h('span', { class: 'dot ' + (on === true ? 'ok' : (on === false ? 'over' : '')) }), x.power === 'unknown' ? '?' : (x.power === 'mixed' ? h('span', { class: 'c-warning' }, 'partly') : (on ? 'ON' : 'OFF'))),
         h('td', { class: 'num' }, fW(x.watts)), h('td', { class: 'num' }, nf(x.amps, 2)),
         h('td', {}, x.host ? h('a', { href: '#/host/' + x.host.id }, x.host.name) : h('span', { class: 'muted' }, '—'),
-          x.host ? h('span', { class: 'muted small', style: 'margin-left:8px' }, (x.host.online && x.host.idlePct != null ? `${Math.round(100 - x.host.idlePct)}% cpu` : 'no data') + (x.host.vms != null ? ` · ${x.host.vms} VMs` : '')) : null));
+          x.host ? h('span', { class: 'muted small', style: 'margin-left:8px' }, (x.host.online && x.host.idlePct != null ? `${Math.round(100 - idleShown(x.host.idlePct))}% cpu` : 'no data') + (x.host.vms != null ? ` · ${x.host.vms} VMs` : '')) : null));
     });
     const table = servers.length ? h('div', { class: 'tablewrap' }, h('table', {},
       h('thead', {}, h('tr', {}, operate ? h('th', { class: 'chk' }) : null, h('th', {}, 'Server'), h('th', {}, 'Type'), h('th', {}, 'Ports'), h('th', {}, 'State'), h('th', { class: 'num' }, 'Power (W)'), h('th', { class: 'num' }, 'Current (A)'), h('th', {}, 'Hypervisor'))),
@@ -553,7 +553,29 @@ function hostDot(x) {
   const why = !x.enabled ? 'disabled' : (!x.trusted ? 'the key of this host is not confirmed yet' : (x.online ? 'online' : (x.error || (x.stale ? 'the data is old' : 'no answer'))));
   return h('span', { class: 'dot ' + st, title: why });
 }
-const idleClass = (v) => (v == null ? '' : (v < 15 ? 'c-over' : (v < 40 ? 'c-warning' : 'c-ok')));
+// CPU idle. The hosts have hyper-threads: the second thread of a core adds far less than a core, so a host that reports 50 % idle has no room
+// left in practice. Two ways to look at it, chosen by every person for themselves (kept on the server): "raw" is what the host reports; "threads"
+// counts 50 % reported as 0 % and 100 % as 100 % (90 % reported = 80 %). The colours mean the same in both: red when 55 % or less is reported
+// (10 % in the second way), orange under 60 % reported (20 %).
+const cpuMode = () => (S.session && S.session.prefs && S.session.prefs.cpuIdleMode === 'threads' ? 'threads' : 'raw');
+const idleShown = (raw) => (raw == null ? null : (cpuMode() === 'threads' ? Math.max(0, (raw - 50) * 2) : raw));
+const idleLevel = (raw) => (raw == null ? '' : (raw < 55 ? 'over' : (raw < 60 ? 'warning' : 'ok')));
+const idleClass = (raw) => (raw == null ? '' : 'c-' + idleLevel(raw));
+const idleLimits = () => (cpuMode() === 'threads' ? 'red below 10 %, orange below 20 %' : 'red below 55 %, orange below 60 %');
+async function setCpuMode(mode) {
+  const prefs = await api('PUT', '/api/me/prefs', { cpuIdleMode: mode });
+  S.session.prefs = prefs;
+}
+function cpuModeControl(onChange) {
+  const one = (mode, label, hint) => h('button', { class: cpuMode() === mode ? 'on' : '', title: hint, onclick: async () => {
+    if (cpuMode() === mode) return;
+    try { await setCpuMode(mode); } catch (e) { setBanner({ title: 'Not saved', error: e.message, running: false }); return; }
+    if (onChange) onChange();
+  } }, label);
+  return h('div', { class: 'seg', role: 'group', 'aria-label': 'How CPU idle is shown' },
+    one('raw', 'As reported', 'The idle % the host reports, 0-100'),
+    one('threads', 'Threads discounted', '50 % reported counts as 0 %, 100 % as 100 %: 90 % reported shows as 80 %'));
+}
 const freeClass = (f) => (f == null ? '' : (f < 0.1 ? 'c-over' : (f < 0.2 ? 'c-warning' : 'c-ok')));
 
 async function viewHosts() {
@@ -578,7 +600,7 @@ async function viewHosts() {
       return h('tr', { class: x.online ? '' : 'dim' },
         h('td', { class: 'name' }, hostDot(x), h('a', { href: '#/host/' + x.id }, x.name)),
         h('td', { class: 'muted' }, x.rackName ? (x.rackId != null ? h('a', { href: '#/rack/' + x.rackId }, `${x.rackName}${x.outletKey ? ' · ' + x.outletKey : ''}`) : '') : (x.outletKey || '—')),
-        h('td', { class: 'num ' + idleClass(x.idlePct) }, x.idlePct == null ? '—' : Math.round(x.idlePct)), h('td', { class: 'num' }, x.load ? Math.round(x.load[1]) : '—'), h('td', { class: 'num' }, x.cores == null ? '—' : x.cores),
+        h('td', { class: 'num ' + idleClass(x.idlePct), title: cpuMode() === 'threads' && x.idlePct != null ? `the host reports ${Math.round(x.idlePct)} % idle` : '' }, x.idlePct == null ? '—' : Math.round(idleShown(x.idlePct))), h('td', { class: 'num' }, x.load ? Math.round(x.load[1]) : '—'), h('td', { class: 'num' }, x.cores == null ? '—' : x.cores),
         h('td', { class: 'num' }, gib(x.memUsed)), h('td', { class: 'num' }, gib(memFree)), h('td', { class: 'num' }, gib(x.memTotal)),
         h('td', { class: 'num' }, st ? tib(st.total) : '—'),
         h('td', { class: 'num ' + freeClass(x.spaceFree != null ? x.spaceFree : freeFrac) }, st ? `${tib(st.avail)} (${Math.round(freeFrac * 100)}%)` : '—'),
@@ -591,10 +613,10 @@ async function viewHosts() {
     const bad = data.hosts.filter((x) => x.enabled && !x.online).length;
     const table = h('div', { class: 'tablewrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', { colspan: 2 }), group('g-compute', 'Compute', 3), group('g-mem', 'Mem', 3), group('g-storage', 'Storage', 3), group('g-info', '', 3)),
-        h('tr', {}, th('name', 'Host'), th('rack', 'Rack · unit'), th('idle', 'Idle %', 1), th('load', '5m load', 1), th('cores', 'Cores', 1), th('used', 'Used (G)', 1), th('free', 'Free (G)', 1), th('total', 'Total (G)', 1),
+        h('tr', {}, th('name', 'Host'), th('rack', 'Rack · unit'), th('idle', cpuMode() === 'threads' ? 'Idle % (threads discounted)' : 'Idle %', 1), th('load', '5m load', 1), th('cores', 'Cores', 1), th('used', 'Used (G)', 1), th('free', 'Free (G)', 1), th('total', 'Total (G)', 1),
           th('stotal', 'Total (T)', 1), th('sfree', 'Free (T)', 1), th('zfs', 'Pool'), th('vms', 'VMs', 1), th('watts', 'Power (W)', 1), th('age', 'Age', 1))),
       h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 14, class: 'muted' }, data.hosts.length ? 'No host matches.' : 'No hosts yet.' + (isAdmin() ? ' Add them in Settings → Hosts.' : ''))))));
-    mount('hosts', h('div', {}, h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', {}, 'Hypervisors'), h('div', { class: 'muted' }, `${data.hosts.length} hosts` + (bad ? ` · ${bad} without current data` : ''))), search), table,
+    mount('hosts', h('div', {}, h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', {}, 'Hypervisors'), h('div', { class: 'muted' }, `${data.hosts.length} hosts` + (bad ? ` · ${bad} without current data` : ''))), h('div', { style: 'display:grid;gap:6px;justify-items:end' }, search, h('div', { class: 'small muted', style: 'display:flex;gap:8px;align-items:center' }, 'CPU idle:', cpuModeControl(draw)))), table,
       h('p', { class: 'note' }, 'Click a host to see which VMs load it. "Free" is what the host can still give out (memory: available; storage: usable space of the ZFS pools, not the raw size with parity; or the free space of the LVM volume groups).')));
   }
   const load = async () => { data = await api('GET', '/api/hosts'); draw(); };
@@ -633,8 +655,8 @@ async function viewHost(id) {
       h('div', { class: 'bar stack' }, seg('', vmMem, 'var(--accent)'), seg('', arc, '#9b59b6'), seg('', other, 'var(--unk)')),
       h('div', { class: 'note' }, h('span', { style: 'color:var(--accent)' }, '■ '), `VMs ${gib(vmMem)} G   `, x.memArc != null ? [h('span', { style: 'color:#9b59b6' }, '■ '), `ZFS cache ${gib(arc)} G   `] : null, h('span', { style: 'color:var(--unk)' }, '■ '), `other ${gib(other)} G   · available ${gib(memTotal - memUsed)} G`)]);
     const cpuCard = h('div', { class: 'card' }, h('h3', {}, 'Processor'), x.idlePct == null ? h('p', { class: 'muted' }, 'No data') : [
-      h('div', { class: 'stat', style: 'margin:8px 0' }, h('div', { class: 'value ' + idleClass(x.idlePct) }, Math.round(x.idlePct), h('small', {}, ' % idle'))),
-      bar((100 - x.idlePct) / 100, x.idlePct < 15 ? 'over' : (x.idlePct < 40 ? 'warning' : 'ok')),
+      h('div', { class: 'stat', style: 'margin:8px 0' }, h('div', { class: 'value ' + idleClass(x.idlePct) }, Math.round(idleShown(x.idlePct)), h('small', {}, ' % idle'), cpuMode() === 'threads' ? h('small', { class: 'muted', style: 'margin-left:8px' }, `(reported ${Math.round(x.idlePct)} %)`) : null)),
+      bar((100 - idleShown(x.idlePct)) / 100, idleLevel(x.idlePct)),
       h('dl', { class: 'kv', style: 'margin-top:10px' }, h('dt', {}, 'Cores'), h('dd', {}, x.cores == null ? '—' : x.cores), h('dt', {}, 'Load 1 / 5 / 15 min'), h('dd', {}, x.load ? x.load.map((v) => Math.round(v * 10) / 10).join(' / ') : '—'),
         h('dt', {}, 'VMs running'), h('dd', {}, x.vms == null ? '—' : x.vms), x.otherCores != null ? [h('dt', {}, 'Host itself'), h('dd', {}, nf(x.otherCores, 2) + ' cores')] : null)]);
     const zfsCards = (x.pools || []).map((p) => {
@@ -702,10 +724,10 @@ async function viewHost(id) {
       // newest on the left: what a person looks for first is today
       const shown = idle.buckets.slice().reverse();
       const cols = shown.map((b, i) => {
-        const col = h('div', { class: 'col' + (b.avg == null ? ' empty' : ''), title: b.avg == null ? `${week ? 'Week of ' : ''}${when(b)}: no readings` : `${week ? 'Week of ' : ''}${when(b)}\naverage idle ${nf(b.avg, 1)}%\nlowest hour ${nf(b.min, 1)}%\n${b.n} readings` },
-          h('span', { class: 'v' }, b.avg == null ? '' : Math.round(b.avg)));
-        const fill = h('i', { class: b.avg == null ? '' : idleClass(b.avg).replace('c-', '') });
-        fill.style.height = b.avg == null ? '0%' : Math.max(2, b.avg) + '%';
+        const col = h('div', { class: 'col' + (b.avg == null ? ' empty' : ''), title: b.avg == null ? `${week ? 'Week of ' : ''}${when(b)}: no readings` : `${week ? 'Week of ' : ''}${when(b)}\naverage idle ${nf(idleShown(b.avg), 1)}%${cpuMode() === 'threads' ? ` (reported ${nf(b.avg, 1)}%)` : ''}\nlowest hour ${nf(idleShown(b.min), 1)}%${cpuMode() === 'threads' ? ` (reported ${nf(b.min, 1)}%)` : ''}\n${b.n} readings` },
+          h('span', { class: 'v' }, b.avg == null ? '' : Math.round(idleShown(b.avg))));
+        const fill = h('i', { class: b.avg == null ? '' : idleLevel(b.avg) });
+        fill.style.height = b.avg == null ? '0%' : Math.max(2, idleShown(b.avg)) + '%';
         col.append(fill);
         const d = new Date(b.t * 1000);
         // a label under every bar for days; for weeks only at the left edge of a month (the bar to its left is newer), otherwise 53 labels would collide
@@ -716,10 +738,10 @@ async function viewHost(id) {
         return col;
       });
       idleBody = [h('div', { class: 'idlebars' + (week ? ' weeks' : '') }, h('div', { class: 'ticks' }, h('span', {}, '100'), h('span', {}, '50'), h('span', {}, '0')), h('div', { class: 'cols' }, cols)),
-        h('p', { class: 'note' }, (week ? 'Newest on the left. Average CPU idle per week (weeks begin on Monday), ' : 'Newest on the left. Average CPU idle per day, ') + 'red below 15 %, orange below 40 %. Hover a bar for the lowest hour. ' +
+        h('p', { class: 'note' }, (week ? 'Newest on the left. Average CPU idle per week (weeks begin on Monday), ' : 'Newest on the left. Average CPU idle per day, ') + idleLimits() + '. Hover a bar for the lowest hour' + (cpuMode() === 'threads' ? ' and for what the host reported' : '') + '. ' +
           (idle.firstData && idle.buckets[0].t < idle.firstData - 86400 ? 'Older bars (right) are empty because the server keeps this history only since ' + new Date(idle.firstData * 1000).toLocaleDateString() + '.' : ''))];
     }
-    const idleCard = h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px' }, h('h2', {}, 'CPU idle %'), idleTabs), idleBody);
+    const idleCard = h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px' }, h('h2', {}, 'CPU idle %'), idleTabs, h('div', { class: 'spacer' }), cpuModeControl(draw)), idleBody);
 
     const vmCard = x.vmList && x.vmList.length ? h('div', { class: 'card', style: 'margin-top:14px' }, h('h2', { style: 'margin-bottom:8px' }, 'VMs running now'),
       h('div', { class: 'tablewrap', style: 'box-shadow:none' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'VM'), h('th', { class: 'num' }, 'CPU now (cores)'), h('th', { class: 'num' }, 'Memory (G)'))),
@@ -829,6 +851,9 @@ async function viewSecurity() {
         h('button', { class: 'primary', disabled: keys.length >= st.max || !st.passkeys, onclick: addPasskey }, 'Add a passkey')),
         table(keys),
         !st.passkeys ? h('p', { class: 'note' }, 'Passkeys are not set up on this server: an administrator adds public_url: https://the-name-of-this-server to config.yaml and restarts it.') : h('p', { class: 'note' }, `Up to ${st.max}. Your laptop's fingerprint reader counts: choose “this device” in the browser's question.`)),
+      h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h2', {}, 'How you see CPU idle'),
+        h('p', { class: 'muted' }, 'The hosts have hyper-threads, which add much less than a real core: a host that reports 50 % idle has no room left. “Threads discounted” shows 50 % reported as 0 % and 100 % as 100 % (90 % reported is 80 %). It is your choice only and applies to every host: the hosts list, the host page and the history bars.'),
+        cpuModeControl(draw), h('p', { class: 'note' }, 'Colours: ' + idleLimits() + ' (the same state in both ways).')),
       h('div', { class: 'card' }, h('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, h('h2', {}, 'Recovery codes'), h('div', { class: 'spacer' }),
         h('button', { disabled: !st.factors.length, onclick: newCodes }, 'Make new codes')),
         h('p', { class: st.factors.length && st.recovery < 3 ? 'c-warning' : 'muted' }, st.factors.length ? `${st.recovery} unused code${st.recovery === 1 ? '' : 's'}. They are the way in when a phone is lost.` : 'Made when you add the first device.'))));
