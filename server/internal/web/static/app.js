@@ -591,7 +591,7 @@ async function viewHosts() {
     let hosts = data.hosts.filter((x) => !filter || (x.name + ' ' + (x.rackName || '') + ' ' + (x.outletKey || '')).toLowerCase().includes(filter));
     const get = cols[sort.key];
     hosts.sort((a, b) => { const va = get(a), vb = get(b); if (va == null && vb == null) return 0; if (va == null) return 1; if (vb == null) return -1; return (va < vb ? -1 : (va > vb ? 1 : 0)) * sort.dir; });
-    const th = (key, label, num) => h('th', { class: 'sortable' + (num ? ' num' : ''), onclick: () => { sort.dir = sort.key === key ? -sort.dir : 1; sort.key = key; draw(); } }, label + (sort.key === key ? (sort.dir > 0 ? ' ↑' : ' ↓') : ''));
+    const th = (key, label, num, tip) => h('th', { class: 'sortable' + (num ? ' num' : ''), title: tip || '', onclick: () => { sort.dir = sort.key === key ? -sort.dir : 1; sort.key = key; draw(); } }, label + (sort.key === key ? (sort.dir > 0 ? ' ↑' : ' ↓') : ''));
     const group = (cls, text, span) => h('th', { class: 'group-head ' + cls, colspan: span, style: 'text-align:center' }, text);
     const rows = hosts.map((x) => {
       const st = storageOf(x);
@@ -613,7 +613,7 @@ async function viewHosts() {
     const bad = data.hosts.filter((x) => x.enabled && !x.online).length;
     const table = h('div', { class: 'tablewrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', { colspan: 2 }), group('g-compute', 'Compute', 3), group('g-mem', 'Mem', 3), group('g-storage', 'Storage', 3), group('g-info', '', 3)),
-        h('tr', {}, th('name', 'Host'), th('rack', 'Rack · unit'), th('idle', cpuMode() === 'threads' ? 'Idle % (threads discounted)' : 'Idle %', 1), th('load', '5m load', 1), th('cores', 'Cores', 1), th('used', 'Used (G)', 1), th('free', 'Free (G)', 1), th('total', 'Total (G)', 1),
+        h('tr', {}, th('name', 'Host'), th('rack', 'Rack · unit'), th('idle', cpuMode() === 'threads' ? 'Idle % TD' : 'Idle %', 1, cpuMode() === 'threads' ? 'Idle %, threads discounted: 50 % reported counts as 0 %' : ''), th('load', '5m load', 1), th('cores', 'Cores', 1), th('used', 'Used (G)', 1), th('free', 'Free (G)', 1), th('total', 'Total (G)', 1),
           th('stotal', 'Total (T)', 1), th('sfree', 'Free (T)', 1), th('zfs', 'Pool'), th('vms', 'VMs', 1), th('watts', 'Power (W)', 1), th('age', 'Age', 1))),
       h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 14, class: 'muted' }, data.hosts.length ? 'No host matches.' : 'No hosts yet.' + (isAdmin() ? ' Add them in Settings → Hosts.' : ''))))));
     mount('hosts', h('div', {}, h('div', { class: 'page-head' }, h('div', { class: 'grow' }, h('h1', {}, 'Hypervisors'), h('div', { class: 'muted' }, `${data.hosts.length} hosts` + (bad ? ` · ${bad} without current data` : ''))), h('div', { style: 'display:grid;gap:6px;justify-items:end' }, search, h('div', { class: 'small muted', style: 'display:flex;gap:8px;align-items:center' }, 'CPU idle:', cpuModeControl(draw)))), table,
